@@ -14,10 +14,44 @@ import {
   Search,
   PenLine,
   X,
-  PlusCircle
+  PlusCircle,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { stateService, Brand, DailySale } from './lib/stateService.ts';
+
+// ===============================================
+// MONTHLY / RANGE TOTALS BULK SYSTEM
+// ===============================================
+export const getDatesInRange = (startStr: string, endStr: string): string[] => {
+  const dates: string[] = [];
+  const start = new Date(startStr);
+  const end = new Date(endStr);
+  
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
+    return [];
+  }
+  
+  const current = new Date(start);
+  while (current <= end) {
+    const yyyy = current.getFullYear();
+    const mm = String(current.getMonth() + 1).padStart(2, '0');
+    const dd = String(current.getDate()).padStart(2, '0');
+    dates.push(`${yyyy}-${mm}-${dd}`);
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+};
+
+export const formatPrettyDate = (dateStr: string): string => {
+  if (!dateStr || !dateStr.includes('-')) return '';
+  const [year, month, day] = dateStr.split('-');
+  const dateObj = new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10));
+  if (isNaN(dateObj.getTime())) return dateStr;
+  const options: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', weekday: 'short' };
+  return dateObj.toLocaleDateString('en-US', options);
+};
 
 export default function App() {
   // Current tab: 'entry' or 'management'
@@ -35,19 +69,26 @@ export default function App() {
   // State elements
   const [brands, setBrands] = useState<Brand[]>([]);
   const [monthlySales, setMonthlySales] = useState<DailySale[]>([]);
-  const [dailySalesInputs, setDailySalesInputs] = useState<{ [brandId: string]: { salesAmount: string; quantitySold: string } }>({});
+  const [dailySalesInputs, setDailySalesInputs] = useState<{ [brandId: string]: { salesAmount: string; quantitySold: string; mtdSalesAmount: string; mtdQuantitySold: string } }>({});
   
   // Choose brand selection state & temporary key-in inputs (Multi-Selection enabled)
   const [selectedBrandIds, setSelectedBrandIds] = useState<string[]>([]);
   const [isBrandConfirmed, setIsBrandConfirmed] = useState<boolean>(false);
-  const [wizardInputs, setWizardInputs] = useState<{ [brandId: string]: { salesAmount: string; quantitySold: string } }>({});
+  const [wizardInputs, setWizardInputs] = useState<{ [brandId: string]: { salesAmount: string; quantitySold: string; mtdSalesAmount: string; mtdQuantitySold: string } }>({});
   const [showOnlyWithSales, setShowOnlyWithSales] = useState<boolean>(true);
 
-  // Batch Report Import States
-  const [rawTextToImport, setRawTextToImport] = useState<string>('');
-  const [showImportPanel, setShowImportPanel] = useState<boolean>(false);
-  const [importMessage, setImportMessage] = useState<{ type: 'success' | 'amber' | 'error'; text: string } | null>(null);
-  const [pendingInputs, setPendingInputs] = useState<{ [brandId: string]: { salesAmount: string; quantitySold: string } } | null>(null);
+  // Monthly Totals Overrides Editor States
+  const [showMonthlyTotalsPanel, setShowMonthlyTotalsPanel] = useState<boolean>(false);
+  const [monthlyTotalsSearch, setMonthlyTotalsSearch] = useState<string>('');
+
+  // Dataset Viewer States
+  const [showDatasetViewer, setShowDatasetViewer] = useState<boolean>(false);
+  const [datasetViewerSearch, setDatasetViewerSearch] = useState<string>('');
+  const [datasetGrouping, setDatasetGrouping] = useState<'byDate' | 'byBrand'>('byDate');
+  const [expandedDates, setExpandedDates] = useState<{ [date: string]: boolean }>({});
+  const [expandedBrands, setExpandedBrands] = useState<{ [brandId: string]: boolean }>({});
+  const [datasetViewMode, setDatasetViewMode] = useState<'table' | 'whatsapp'>('whatsapp');
+  const [datasetCopied, setDatasetCopied] = useState<boolean>(false);
 
   // Interaction/UI states
   const [loading, setLoading] = useState<boolean>(true);
@@ -83,17 +124,13 @@ export default function App() {
         const found = dSales.find(s => s.brandId === b.id);
         initialInputs[b.id] = {
           salesAmount: found && found.salesAmount > 0 ? String(found.salesAmount) : '',
-          quantitySold: found && found.quantitySold > 0 ? String(found.quantitySold) : ''
+          quantitySold: found && found.quantitySold > 0 ? String(found.quantitySold) : '',
+          mtdSalesAmount: found && found.mtdSalesAmount && found.mtdSalesAmount > 0 ? String(found.mtdSalesAmount) : '',
+          mtdQuantitySold: found && found.mtdQuantitySold && found.mtdQuantitySold > 0 ? String(found.mtdQuantitySold) : ''
         };
       });
       
-      if (pendingInputs) {
-        const merged = { ...initialInputs, ...pendingInputs };
-        setDailySalesInputs(merged);
-        setPendingInputs(null); // Reset queue
-      } else {
-        setDailySalesInputs(initialInputs);
-      }
+      setDailySalesInputs(initialInputs);
       
       // Reset active brand key-in selection on date change
       setSelectedBrandIds([]);
@@ -108,37 +145,67 @@ export default function App() {
     }
   };
 
-  // Helper: Computes MTD stats for a given brand
-  // MTD sums historical sales from the 1st of the month UP TO the selected date (inclusive)
+  // Helper: Computes/gets MTD stats for a given brand
   const getBrandMTD = (brandId: string) => {
+    const currentInput = dailySalesInputs[brandId];
+    const mtdInputAmt = currentInput?.mtdSalesAmount;
+    const mtdInputQty = currentInput?.mtdQuantitySold;
+
+    const savedRecord = monthlySales.find(s => s.brandId === brandId && s.date === selectedDate);
+
     let salesAmountSum = 0;
     let quantitySoldSum = 0;
 
-    // We filter monthlySales where date is <= selectedDate
-    monthlySales.forEach((sale) => {
-      if (sale.brandId === brandId && sale.date <= selectedDate) {
-        salesAmountSum += sale.salesAmount;
-        quantitySoldSum += sale.quantitySold;
-      }
-    });
-
-    // Also factor in current unsaved/inputted values from the state to make it real-time!
-    const currentInput = dailySalesInputs[brandId];
-    const currentInputAmt = parseFloat(currentInput?.salesAmount || '0') || 0;
-    const currentInputQty = parseInt(currentInput?.quantitySold || '0', 10) || 0;
-
-    // Find if the current date is already saved in monthlySales to avoid double-counting
-    const wasAlreadySavedInMonth = monthlySales.some(s => s.brandId === brandId && s.date === selectedDate);
-    if (!wasAlreadySavedInMonth) {
-      salesAmountSum += currentInputAmt;
-      quantitySoldSum += currentInputQty;
+    // Determine MTD Sales Amount
+    if (mtdInputAmt && parseFloat(mtdInputAmt) >= 0) {
+      salesAmountSum = parseFloat(mtdInputAmt);
+    } else if (savedRecord && typeof savedRecord.mtdSalesAmount === 'number' && savedRecord.mtdSalesAmount > 0) {
+      salesAmountSum = savedRecord.mtdSalesAmount;
     } else {
-      // If it was already saved, replace the saved monthly record value with current real-time input
-      const savedRecord = monthlySales.find(s => s.brandId === brandId && s.date === selectedDate);
-      if (savedRecord) {
-        salesAmountSum = salesAmountSum - savedRecord.salesAmount + currentInputAmt;
-        quantitySoldSum = quantitySoldSum - savedRecord.quantitySold + currentInputQty;
+      // Dynamic fallback (standard summing)
+      let sum = 0;
+      monthlySales.forEach((sale) => {
+        if (sale.brandId === brandId && sale.date <= selectedDate) {
+          sum += sale.salesAmount;
+        }
+      });
+      const currentInputAmt = parseFloat(currentInput?.salesAmount || '0') || 0;
+      const wasAlreadySavedInMonth = monthlySales.some(s => s.brandId === brandId && s.date === selectedDate);
+      if (!wasAlreadySavedInMonth) {
+        sum += currentInputAmt;
+      } else {
+        const savedRec = monthlySales.find(s => s.brandId === brandId && s.date === selectedDate);
+        if (savedRec) {
+          sum = sum - savedRec.salesAmount + currentInputAmt;
+        }
       }
+      salesAmountSum = sum;
+    }
+
+    // Determine MTD Quantity
+    if (mtdInputQty && parseInt(mtdInputQty, 10) >= 0) {
+      quantitySoldSum = parseInt(mtdInputQty, 10);
+    } else if (savedRecord && typeof savedRecord.mtdQuantitySold === 'number' && savedRecord.mtdQuantitySold > 0) {
+      quantitySoldSum = savedRecord.mtdQuantitySold;
+    } else {
+      // Dynamic fallback (standard summing)
+      let sum = 0;
+      monthlySales.forEach((sale) => {
+        if (sale.brandId === brandId && sale.date <= selectedDate) {
+          sum += sale.quantitySold;
+        }
+      });
+      const currentInputQty = parseInt(currentInput?.quantitySold || '0', 10) || 0;
+      const wasAlreadySavedInMonth = monthlySales.some(s => s.brandId === brandId && s.date === selectedDate);
+      if (!wasAlreadySavedInMonth) {
+        sum += currentInputQty;
+      } else {
+        const savedRec = monthlySales.find(s => s.brandId === brandId && s.date === selectedDate);
+        if (savedRec) {
+          sum = sum - savedRec.quantitySold + currentInputQty;
+        }
+      }
+      quantitySoldSum = sum;
     }
 
     return {
@@ -147,22 +214,51 @@ export default function App() {
     };
   };
 
-  // Change input handler
-  const handleInputChange = (brandId: string, field: 'salesAmount' | 'quantitySold', value: string) => {
-    // Only allow numbers and decimal places
-    const cleanValue = value.replace(/[^0-9.]/g, '');
-    setDailySalesInputs(prev => ({
-      ...prev,
-      [brandId]: {
-        ...prev[brandId],
-        [field]: cleanValue
-      }
-    }));
+  // Shift calendar month by 1
+  const handleShiftMonth = (direction: 'prev' | 'next') => {
+    const [yearStr, monthStr, dayStr] = selectedDate.split('-');
+    const currentYear = parseInt(yearStr, 10);
+    const currentMonth = parseInt(monthStr, 10); // 1-indexed
+    const currentDay = parseInt(dayStr, 10);
+    
+    let targetMonth = direction === 'prev' ? currentMonth - 1 : currentMonth + 1;
+    let targetYear = currentYear;
+    
+    if (targetMonth < 1) {
+      targetMonth = 12;
+      targetYear -= 1;
+    } else if (targetMonth > 12) {
+      targetMonth = 1;
+      targetYear += 1;
+    }
+    
+    const targetMonthStr = String(targetMonth).padStart(2, '0');
+    const totalDaysInTargetMonth = new Date(targetYear, targetMonth, 0).getDate();
+    const targetDay = currentDay > totalDaysInTargetMonth ? 1 : currentDay;
+    const targetDayStr = String(targetDay).padStart(2, '0');
+    
+    const newDateStr = `${targetYear}-${targetMonthStr}-${targetDayStr}`;
+    setSelectedDate(newDateStr);
   };
 
-  // Clear all current selections
-  const handleClearSelectionState = () => {
-    setSelectedBrandIds([]);
+  // Helper properties to draw current monthly progress calendar grid
+  const getDaysInActiveMonth = () => {
+    const [yearStr, monthStr] = selectedDate.split('-');
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10); // 1-indexed
+    
+    // Total days in this active month
+    const totalDays = new Date(year, month, 0).getDate();
+    
+    // Day of the week of first day of that month (0=Sunday, 1=Monday, ..., 6=Saturday)
+    const firstDayIndex = new Date(year, month - 1, 1).getDay();
+    
+    return {
+      year,
+      month,
+      totalDays,
+      firstDayIndex
+    };
   };
 
   // Select/Toggle a brand in multi-selection mode
@@ -181,11 +277,13 @@ export default function App() {
     if (selectedBrandIds.length === 0) return;
     
     // Initialize wizard inputs with existing values from dailySalesInputs (or empty if none)
-    const initialWizardInputs: { [brandId: string]: { salesAmount: string; quantitySold: string } } = {};
+    const initialWizardInputs: { [brandId: string]: { salesAmount: string; quantitySold: string; mtdSalesAmount: string; mtdQuantitySold: string } } = {};
     selectedBrandIds.forEach(id => {
       initialWizardInputs[id] = {
         salesAmount: dailySalesInputs[id]?.salesAmount || '',
-        quantitySold: dailySalesInputs[id]?.quantitySold || ''
+        quantitySold: dailySalesInputs[id]?.quantitySold || '',
+        mtdSalesAmount: dailySalesInputs[id]?.mtdSalesAmount || '',
+        mtdQuantitySold: dailySalesInputs[id]?.mtdQuantitySold || ''
       };
     });
     
@@ -209,7 +307,7 @@ export default function App() {
   };
 
   // Handle value key-in change for a specific brand in the active wizard
-  const handleWizardInputChange = (brandId: string, field: 'salesAmount' | 'quantitySold', value: string) => {
+  const handleWizardInputChange = (brandId: string, field: 'salesAmount' | 'quantitySold' | 'mtdSalesAmount' | 'mtdQuantitySold', value: string) => {
     const cleanValue = value.replace(/[^0-9.]/g, '');
     setWizardInputs(prev => ({
       ...prev,
@@ -248,7 +346,9 @@ export default function App() {
         if (draft) {
           updated[id] = {
             salesAmount: draft.salesAmount.replace(/[^0-9.]/g, ''),
-            quantitySold: draft.quantitySold.replace(/[^0-9]/g, '')
+            quantitySold: draft.quantitySold.replace(/[^0-9]/g, ''),
+            mtdSalesAmount: draft.mtdSalesAmount ? draft.mtdSalesAmount.replace(/[^0-9.]/g, '') : '',
+            mtdQuantitySold: draft.mtdQuantitySold ? draft.mtdQuantitySold.replace(/[^0-9]/g, '') : ''
           };
         }
       });
@@ -281,7 +381,9 @@ export default function App() {
       setWizardInputs({
         [brandId]: {
           salesAmount: dailySalesInputs[brandId]?.salesAmount || '',
-          quantitySold: dailySalesInputs[brandId]?.quantitySold || ''
+          quantitySold: dailySalesInputs[brandId]?.quantitySold || '',
+          mtdSalesAmount: dailySalesInputs[brandId]?.mtdSalesAmount || '',
+          mtdQuantitySold: dailySalesInputs[brandId]?.mtdQuantitySold || ''
         }
       });
       setIsBrandConfirmed(true); // Straight to edit value inputs
@@ -307,11 +409,13 @@ export default function App() {
     try {
       setLoading(true);
       const inputs = Object.entries(dailySalesInputs).map(([brandId, val]) => {
-        const item = val as { salesAmount: string; quantitySold: string };
+        const item = val as { salesAmount: string; quantitySold: string; mtdSalesAmount: string; mtdQuantitySold: string };
         return {
           brandId,
           salesAmount: parseFloat(item.salesAmount) || 0,
-          quantitySold: parseInt(item.quantitySold, 10) || 0
+          quantitySold: parseInt(item.quantitySold, 10) || 0,
+          mtdSalesAmount: item.mtdSalesAmount && parseFloat(item.mtdSalesAmount) > 0 ? parseFloat(item.mtdSalesAmount) : undefined,
+          mtdQuantitySold: item.mtdQuantitySold && parseInt(item.mtdQuantitySold, 10) > 0 ? parseInt(item.mtdQuantitySold, 10) : undefined
         };
       });
 
@@ -342,7 +446,7 @@ export default function App() {
     if (window.confirm("Are you sure you want to clear all quantities and amounts entered for today?")) {
       const cleared: typeof dailySalesInputs = {};
       brands.forEach((b) => {
-        cleared[b.id] = { salesAmount: '', quantitySold: '' };
+        cleared[b.id] = { salesAmount: '', quantitySold: '', mtdSalesAmount: '', mtdQuantitySold: '' };
       });
       setDailySalesInputs(cleared);
     }
@@ -398,181 +502,153 @@ export default function App() {
     }
   };
 
-  // ==========================================
-  // BATCH REPORT TEXT PARSER & IMPORT ROUTINES
-  // ==========================================
-  const extractDateFromText = (text: string): string | null => {
-    const monthShortMap: { [key: string]: string } = {
-      jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
-      jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
-      june: '06', july: '07', sept: '09'
-    };
 
-    // Case 1: DD MMM YY or DD MMM YYYY (separated by space, dash or slash)
-    const regex1 = /(\d{1,2})[\s\-/\\]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-/\\]+(\d{2,4})/i;
-    const match1 = text.match(regex1);
-    if (match1) {
-      const day = match1[1].padStart(2, '0');
-      const monthLabel = match1[2].toLowerCase();
-      const month = monthShortMap[monthLabel] || '01';
-      let year = match1[3];
-      if (year.length === 2) {
-        year = `20${year}`;
+  // Helper: Computes the dynamic sum (without MTD manual override) up to selectedDate
+  const getCalculatedMTD = (brandId: string) => {
+    const currentInput = dailySalesInputs[brandId];
+    let salesSum = 0;
+    let qtySum = 0;
+
+    // Dynamic fallback (standard summing)
+    monthlySales.forEach((sale) => {
+      if (sale.brandId === brandId && sale.date <= selectedDate) {
+        salesSum += sale.salesAmount;
+        qtySum += sale.quantitySold;
       }
-      return `${year}-${month}-${day}`;
-    }
+    });
 
-    // Case 2: YYYY-MM-DD
-    const regex2 = /(\d{4})[-/](\d{1,2})[-/](\d{1,2})/;
-    const match2 = text.match(regex2);
-    if (match2) {
-      return `${match2[1]}-${match2[2].padStart(2, '0')}-${match2[3].padStart(2, '0')}`;
-    }
-
-    // Case 3: DD-MM-YYYY or DD/MM/YYYY
-    const regex3 = /(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/;
-    const match3 = text.match(regex3);
-    if (match3) {
-      const day = match3[1].padStart(2, '0');
-      const month = match3[2].padStart(2, '0');
-      let year = match3[3];
-      if (year.length === 2) {
-        year = `20${year}`;
-      }
-      return `${year}-${month}-${day}`;
-    }
-
-    return null;
-  };
-
-  const findBrandMatch = (brandRaw: string): Brand | undefined => {
-    const cleanStr = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const target = cleanStr(brandRaw);
-    if (!target) return undefined;
+    const currentInputAmt = parseFloat(currentInput?.salesAmount || '0') || 0;
+    const currentInputQty = parseInt(currentInput?.quantitySold || '0', 10) || 0;
+    const wasAlreadySavedInMonth = monthlySales.some(s => s.brandId === brandId && s.date === selectedDate);
     
-    // 1. Exact cleaned match
-    let found = brands.find(b => cleanStr(b.name) === target);
-    if (found) return found;
-
-    // 2. Contains match (as fallback)
-    found = brands.find(b => cleanStr(b.name).includes(target) || target.includes(cleanStr(b.name)));
-    return found;
-  };
-
-  const handleImportReport = () => {
-    setImportMessage(null);
-    if (!rawTextToImport.trim()) {
-      setImportMessage({ type: 'error', text: 'Please enter or paste report text first.' });
-      return;
-    }
-
-    const lines = rawTextToImport.split('\n');
-    const detectedDateStr = extractDateFromText(rawTextToImport);
-    const newInputs = { ...dailySalesInputs };
-    let matchCount = 0;
-    let totalLinesParsed = 0;
-
-    // Robust capture regex for lines like: Bonia =0/1798⌚0/3 or Naviforce =199/1594⌚2/11 or service =0/15⌚0/2
-    // We match "BrandName = todaySale/mtdSale⌚todayQty/mtdQty" or with space separators instead of "⌚"
-    const metricsRegex = /^([\d.\s]+)\/([\d.\s]+)(?:⌚|\s+|\/)([\d\s]+)\/([\d\s]+)/i;
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.includes('=')) continue;
-
-      const delimiterIndex = trimmed.indexOf('=');
-      const brandRaw = trimmed.substring(0, delimiterIndex).trim();
-      const rightPart = trimmed.substring(delimiterIndex + 1).trim();
-
-      const foundBrand = findBrandMatch(brandRaw);
-      if (foundBrand) {
-        totalLinesParsed++;
-        // Clean out any spaces inside the right part for more consistent matches
-        const cleanedRightPart = rightPart.replace(/\s+/g, ' ');
-        const match = cleanedRightPart.match(metricsRegex);
-        if (match) {
-          const todaySale = match[1].trim();
-          const todayQty = match[3].trim();
-
-          const todaySaleNum = parseFloat(todaySale) || 0;
-          const todayQtyNum = parseInt(todayQty, 10) || 0;
-
-          newInputs[foundBrand.id] = {
-            salesAmount: todaySaleNum > 0 ? String(todaySaleNum) : '',
-            quantitySold: todayQtyNum > 0 ? String(todayQtyNum) : ''
-          };
-          matchCount++;
-        }
-      }
-    }
-
-    if (totalLinesParsed === 0) {
-      setImportMessage({
-        type: 'error',
-        text: 'Could not find any matching lines with format "Brand = TodaySale/MtdSale⌚TodayQty/MtdQty". Please check format.'
-      });
-      return;
-    }
-
-    // Helper closure to set state
-    const applyInputsOnCurrentDate = () => {
-      setDailySalesInputs(newInputs);
-      setImportMessage({
-        type: 'success',
-        text: `Extracted & mapped ${matchCount} matching brand entries successfully! Please click the "Save Daily Sales to Database" button at the bottom of the ledger to persist!`
-      });
-      setRawTextToImport('');
-    };
-
-    if (detectedDateStr && detectedDateStr !== selectedDate) {
-      if (window.confirm(`Detected date: ${detectedDateStr} (different from currently active ${selectedDate}). Would you like to switch active date to ${detectedDateStr} and import these records?`)) {
-        // Enqueue inputs so loadBaseData applies them for the new loaded date
-        setPendingInputs(newInputs);
-        setSelectedDate(detectedDateStr);
-        setImportMessage({
-          type: 'success',
-          text: `Switched reporting date to ${detectedDateStr}. Extracted & mapped ${matchCount} brand entries successfully. Click "Save Daily Sales to Database" below to compile!`
-        });
-        setRawTextToImport('');
-      } else {
-        // If they refuse, apply to the current active date anyway as requested
-        applyInputsOnCurrentDate();
-      }
+    if (!wasAlreadySavedInMonth) {
+      salesSum += currentInputAmt;
+      qtySum += currentInputQty;
     } else {
-      applyInputsOnCurrentDate();
+      const savedRec = monthlySales.find(s => s.brandId === brandId && s.date === selectedDate);
+      if (savedRec) {
+        salesSum = salesSum - savedRec.salesAmount + currentInputAmt;
+        qtySum = qtySum - savedRec.quantitySold + currentInputQty;
+      }
+    }
+
+    return { salesAmount: salesSum, quantitySold: qtySum };
+  };
+
+  // Monthly Totals Overrides Handlers
+  const handleMonthlyOverrideChange = (brandId: string, field: 'mtdSalesAmount' | 'mtdQuantitySold', value: string) => {
+    const cleanValue = value.replace(/[^0-9.]/g, '');
+    setDailySalesInputs(prev => ({
+      ...prev,
+      [brandId]: {
+        salesAmount: prev[brandId]?.salesAmount || '',
+        quantitySold: prev[brandId]?.quantitySold || '',
+        mtdSalesAmount: prev[brandId]?.mtdSalesAmount || '',
+        mtdQuantitySold: prev[brandId]?.mtdQuantitySold || '',
+        [field]: cleanValue
+      }
+    }));
+  };
+
+  const handleSaveMonthlyOverrides = async () => {
+    try {
+      setLoading(true);
+      await handleSave();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const loadJune12Example = () => {
-    setRawTextToImport(`12 Jun 26(MRT)
-*Sale RM 314
-
-BATTERY (CLOCK) =0/0⌚0/0
-Bigotti =0/625⌚0/2
-Bonia =0/1798⌚0/3
-Caesar =0/0⌚0/0
-Casio =0/2547⌚0/16
-Cro wc =0/818⌚0/5
-Chronctech =0/0⌚0/0
-Digitec =0/0⌚0/0
-Daniel klein =0/0⌚0/0
-J.bovier =0/0⌚0/0
-L. strap =0/69⌚0/1
-Mini Focus =0/0⌚0/0
-Naviforce =199/1594⌚2/11
-Pvc strap =0/0⌚0/0
-R-bat =0/120⌚0/3
-R&E =0/0⌚0/0
-REWARDS WATCH =0/0⌚0/1
-S-bat =87/1193⌚4/48
-Slo/pokemon =0/139.8⌚0/2
-S.parts =28/138⌚2/14
-Submarine =0/700⌚0/8
-service =0/15⌚0/2
-
-Total 1-12 Jun 26
-*Rm 9756.8`);
+  // Dataset Viewer Helpers
+  const getPrevDaysInActiveMonth = () => {
+    if (!selectedDate || !selectedDate.includes('-')) return [];
+    const [yearStr, monthStr, dayStr] = selectedDate.split('-');
+    const day = parseInt(dayStr, 10);
+    const prevDays: string[] = [];
+    
+    // Day 1 to latest/selected day (inclusive)
+    for (let d = 1; d <= day; d++) {
+      const dStr = String(d).padStart(2, '0');
+      prevDays.push(`${yearStr}-${monthStr}-${dStr}`);
+    }
+    
+    return prevDays;
   };
+
+  const toggleDateExpanded = (dateStr: string) => {
+    setExpandedDates(prev => ({
+      ...prev,
+      [dateStr]: !prev[dateStr]
+    }));
+  };
+
+  const toggleBrandExpanded = (brandId: string) => {
+    setExpandedBrands(prev => ({
+      ...prev,
+      [brandId]: !prev[brandId]
+    }));
+  };
+
+  const getDayTotals = (dateStr: string) => {
+    const listForDate = monthlySales.filter(s => s.date === dateStr);
+    const totalSales = listForDate.reduce((sum, s) => sum + s.salesAmount, 0);
+    const totalQty = listForDate.reduce((sum, s) => sum + s.quantitySold, 0);
+    const enteredBrandsCount = listForDate.filter(s => s.salesAmount > 0 || s.quantitySold > 0).length;
+    return { totalSales, totalQty, enteredBrandsCount };
+  };
+
+  const generateWhatsAppDatasetText = () => {
+    const monthNames = [
+      "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
+      "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"
+    ];
+    
+    const [yearStr, monthStr, dayStr] = selectedDate.split('-');
+    const dayNum = parseInt(dayStr, 10);
+    const monthNum = parseInt(monthStr, 10);
+    const yearNum = parseInt(yearStr, 10);
+    const formattedMonth = monthNames[monthNum - 1] || "MONTH";
+
+    // 1. Compute Daily Total Sales Sum
+    let dailyTotalSales = 0;
+    brands.forEach((b) => {
+      const amt = parseFloat(dailySalesInputs[b.id]?.salesAmount || '0') || 0;
+      dailyTotalSales += amt;
+    });
+
+    // 2. Compute grand total of MTD sales RM for all brands combined
+    let grandTotalMTD = 0;
+    brands.forEach((b) => {
+      grandTotalMTD += getBrandMTD(b.id).salesAmount;
+    });
+
+    // 3. Construct specific template
+    let report = `${dayNum} ${formattedMonth} ${yearNum}(MRT)\n`;
+    report += `*Sale RM ${dailyTotalSales.toFixed(2)}\n\n`;
+
+    brands.forEach((b) => {
+      const dailyAmt = parseFloat(dailySalesInputs[b.id]?.salesAmount || '0') || 0;
+      const dailyQty = parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10) || 0;
+      const mtd = getBrandMTD(b.id);
+
+      report += `${b.name} =${dailyAmt > 0 ? dailyAmt.toFixed(2) : '0'}/${mtd.salesAmount > 0 ? mtd.salesAmount.toFixed(2) : '0'}⌚${dailyQty}/${mtd.quantitySold}\n`;
+    });
+
+    report += `\nTotal 1-${dayNum} ${formattedMonth} ${yearNum}\n`;
+    report += `*Rm ${grandTotalMTD.toFixed(2)}`;
+
+    return report;
+  };
+
+  const handleCopyWhatsAppDataset = () => {
+    const text = generateWhatsAppDatasetText();
+    navigator.clipboard.writeText(text);
+    setDatasetCopied(true);
+    setTimeout(() => setDatasetCopied(false), 3000);
+  };
+
 
   // View B: Brand management operations
   const handleAddBrand = async (e: React.FormEvent) => {
@@ -768,89 +844,596 @@ Total 1-12 Jun 26
               </div>
             </div>
 
-            {/* Collapsible Batch Importer Section */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-4 bg-gradient-to-r from-slate-50 to-indigo-50/40 flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-slate-100">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-lg shadow-xs">
-                    📝
+            {/* Quick Actions Panel */}
+            <div className="flex justify-end gap-2.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDatasetViewer(!showDatasetViewer);
+                  setDatasetViewerSearch('');
+                  setExpandedDates({});
+                  setExpandedBrands({});
+                }}
+                className="py-1.5 px-3.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 hover:border-emerald-350 text-emerald-800 hover:text-emerald-900 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <span>💬 {showDatasetViewer ? 'Close WhatsApp Dataset Viewer' : 'View WhatsApp Dataset (Day 1 to Latest)'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMonthlyTotalsPanel(!showMonthlyTotalsPanel);
+                  setMonthlyTotalsSearch('');
+                }}
+                className="py-1.5 px-3.5 bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 text-slate-600 hover:text-indigo-700 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <span>📊 {showMonthlyTotalsPanel ? 'Close Monthly Totals Editor' : 'Adjust Monthly Totals (Overrides)'}</span>
+              </button>
+            </div>
+
+            {showDatasetViewer && (
+              <div className="bg-white rounded-2xl border border-emerald-150 shadow-md overflow-hidden">
+                <div className="p-4 bg-gradient-to-r from-slate-50 via-slate-50/50 to-emerald-50/40 flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-emerald-100">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-lg shadow-2xs">
+                      💬
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-sm">Month Dataset Viewer (Day 1 to Latest Day)</h3>
+                      <p className="text-xs text-slate-500 font-medium font-sans">Verify and copy logs from Day 1 to your selected active reporting date formatted beautifully for WhatsApp.</p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-bold text-slate-800 text-sm">Batch Import / Paste Historical Report</h3>
-                    <p className="text-xs text-slate-500">Paste your structured text report (e.g. WhatsApp / legacy format) to auto-fill the daily records instantly.</p>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowDatasetViewer(false)}
+                    className="p-1 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-400 hover:text-slate-700 text-xs font-bold rounded-lg cursor-pointer"
+                  >
+                    Close
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowImportPanel(!showImportPanel);
-                    setImportMessage(null);
-                  }}
-                  className="px-4 py-2 border border-slate-200 hover:border-indigo-300 text-indigo-600 hover:bg-indigo-50/20 font-bold text-xs rounded-xl shadow-2xs transition-all active:scale-97 cursor-pointer flex items-center gap-1.5"
-                >
-                  {showImportPanel ? 'Hide Importer' : 'Paste & Autofill Report'}
-                </button>
-              </div>
 
-              {showImportPanel && (
-                <div className="p-5 flex flex-col gap-4 animate-in fade-in duration-200">
-                  <div className="text-xs text-slate-500 bg-slate-50 rounded-xl p-3.5 border border-slate-150 leading-relaxed">
-                    <strong className="text-slate-700">Instructions:</strong> Paste the text report containing lines like <code className="bg-white px-1.5 py-0.5 rounded border font-mono text-indigo-600 text-[11px]">BrandName = 199/1594⌚2/11</code>. The tool will automatically locate the correct Watch Brand from your setup, parse today's sale price (<strong className="text-indigo-600">RM 199</strong>) and quantity sold (<strong className="text-indigo-600">2⌚</strong>), and map them. If a date is detected in the text (e.g. <code className="bg-white px-1.5 py-0.5 rounded border font-mono">12 Jun 26</code>), you will be asked to switch to that date automatically!
+                <div className="p-5 flex flex-col gap-4">
+                  {/* Mode Selector Tab Bar */}
+                  <div className="flex bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs font-bold self-start gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setDatasetViewMode('table')}
+                      className={`px-4 py-2 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                        datasetViewMode === 'table'
+                          ? 'bg-white text-emerald-800 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      📁 Interactive Tables
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDatasetViewMode('whatsapp')}
+                      className={`px-4 py-2 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                        datasetViewMode === 'whatsapp'
+                          ? 'bg-white text-emerald-800 shadow-sm'
+                          : 'text-slate-550 hover:text-slate-800'
+                      }`}
+                    >
+                      💬 WhatsApp Format
+                    </button>
                   </div>
 
-                  {importMessage && (
-                    <div className={`p-4 rounded-xl flex items-start gap-2.5 text-xs font-bold leading-normal border ${
-                      importMessage.type === 'success'
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                        : importMessage.type === 'amber'
-                          ? 'bg-amber-50 border-amber-200 text-amber-800'
-                          : 'bg-rose-50 border-rose-200 text-rose-800'
-                    }`}>
-                      <AlertCircle className="w-4.5 h-4.5 shrink-0" />
-                      <div>{importMessage.text}</div>
+                  {/* Top Search Controls Bar */}
+                  {datasetViewMode === 'table' && (
+                    <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+                      {/* View Grouping selector tabs */}
+                      <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs font-bold self-start">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDatasetGrouping('byDate');
+                            setDatasetViewerSearch('');
+                          }}
+                          className={`px-3 py-1.5 rounded-md transition-all ${
+                            datasetGrouping === 'byDate'
+                              ? 'bg-white text-emerald-700 shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          Group by Day
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDatasetGrouping('byBrand');
+                            setDatasetViewerSearch('');
+                          }}
+                          className={`px-3 py-1.5 rounded-md transition-all ${
+                            datasetGrouping === 'byBrand'
+                              ? 'bg-white text-emerald-700 shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          Group by Brand
+                        </button>
+                      </div>
+
+                      {/* Filter search box */}
+                      <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs max-w-xs w-full">
+                        <Search className="w-4 h-4 text-slate-400 shrink-0" />
+                        <input
+                          type="text"
+                          placeholder="Filter by brand name..."
+                          value={datasetViewerSearch}
+                          onChange={(e) => setDatasetViewerSearch(e.target.value)}
+                          className="w-full text-xs bg-transparent outline-none placeholder:text-slate-400 font-medium text-slate-700"
+                        />
+                        {datasetViewerSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setDatasetViewerSearch('')}
+                            className="text-slate-400 hover:text-slate-600 text-xs font-medium cursor-pointer"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
 
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                      <span>Report Textbox</span>
+                  {/* Range Information Banner */}
+                  {(() => {
+                    const prevDates = getPrevDaysInActiveMonth();
+                    if (prevDates.length === 0) {
+                      return (
+                        <div className="p-6 text-center bg-slate-50 border border-slate-200 rounded-xl">
+                          <p className="text-slate-400 text-xs font-semibold leading-relaxed">
+                            No days logged in the active month!
+                          </p>
+                          <p className="text-[11px] text-slate-400 mt-1">
+                            The viewer displays dataset logs starting from Day 1 of the active month up to your latest reporting date.
+                          </p>
+                        </div>
+                      );
+                    }
+
+                    const startDateStr = prevDates[0];
+                    const endDateStr = prevDates[prevDates.length - 1];
+
+                    return (
+                      <div className="text-2xs font-bold text-emerald-800 bg-emerald-50/75 py-1.5 px-3 rounded-lg border border-emerald-100 flex items-center justify-between font-sans">
+                        <span>📅 Period: {formatPrettyDate(startDateStr)} to {formatPrettyDate(endDateStr)}</span>
+                        <span className="opacity-80">Total {prevDates.length} Day{prevDates.length > 1 ? 's' : ''} Tracked</span>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Main lists (Interactive Tables vs. WhatsApp format live preview) */}
+                  {datasetViewMode === 'table' ? (
+                    <div className="flex flex-col gap-2 max-h-[380px] overflow-y-auto pr-1">
+                      {/* GROUP BY DATE */}
+                      {datasetGrouping === 'byDate' && getPrevDaysInActiveMonth().length > 0 && (
+                        (() => {
+                          const prevDates = [...getPrevDaysInActiveMonth()].reverse(); // reverse chronological (yesterday first!)
+                          return prevDates.map((dateStr) => {
+                            const isExpanded = !!expandedDates[dateStr];
+                            const { totalSales, totalQty, enteredBrandsCount } = getDayTotals(dateStr);
+                            
+                            // Filter the actual saved sales records for that date (optionally filtered by search)
+                            const daySales = monthlySales.filter(s => {
+                              if (s.date !== dateStr) return false;
+                              if (datasetViewerSearch) {
+                                const bName = brands.find(b => b.id === s.brandId)?.name || '';
+                                return bName.toLowerCase().includes(datasetViewerSearch.toLowerCase());
+                              }
+                              return s.salesAmount > 0 || s.quantitySold > 0 || s.mtdSalesAmount !== undefined;
+                            });
+
+                            return (
+                              <div key={dateStr} className="border border-slate-150 rounded-xl overflow-hidden bg-white shadow-2xs">
+                                {/* Header Accordion Triggers */}
+                                <div 
+                                  onClick={() => toggleDateExpanded(dateStr)}
+                                  className="p-3.5 hover:bg-slate-50/80 transition-colors cursor-pointer flex items-center justify-between gap-4 select-none"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    {isExpanded ? (
+                                      <ChevronUp className="w-4 h-4 text-emerald-600 shrink-0" />
+                                    ) : (
+                                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                                    )}
+                                    <span className="font-bold text-slate-850 text-xs">
+                                      {formatPrettyDate(dateStr)}
+                                    </span>
+                                    {enteredBrandsCount > 0 ? (
+                                      <span className="text-[10px] bg-emerald-50 text-emerald-800 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                                        {enteredBrandsCount} entered
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] bg-slate-100 text-slate-450 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                                        no records
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="text-right text-xs font-semibold text-slate-500 font-mono">
+                                    <span className="font-bold text-slate-700">RM {totalSales.toFixed(2)}</span>
+                                    <span className="text-slate-350 ml-1.5 mr-1.5">•</span>
+                                    <span>{totalQty} sold</span>
+                                  </div>
+                                </div>
+
+                                {/* Accordion Content */}
+                                {isExpanded && (
+                                  <div className="border-t border-slate-100 p-3 bg-slate-50/30">
+                                    {daySales.length === 0 ? (
+                                      <div className="py-4 text-center text-slate-400 text-[11px] font-medium font-sans">
+                                        {datasetViewerSearch ? "No matching brand entries on this date." : "No sales figures entered for this date."}
+                                      </div>
+                                    ) : (
+                                      <table className="w-full text-left border-collapse text-2xs">
+                                        <thead>
+                                          <tr className="border-b border-slate-150 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+                                            <th className="py-1.5 px-2">Brand Category</th>
+                                            <th className="py-1.5 px-2 text-right">Today Sales</th>
+                                            <th className="py-1.5 px-2 text-center">Today Qty</th>
+                                            <th className="py-1.5 px-2 text-right">Manual MTD Override</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 bg-white">
+                                          {daySales.map((s) => {
+                                            const brandName = brands.find(b => b.id === s.brandId)?.name || 'Unknown Brand';
+                                            const hasOverride = s.mtdSalesAmount !== undefined || s.mtdQuantitySold !== undefined;
+                                            return (
+                                              <tr key={s.id} className="hover:bg-slate-50/40 font-medium">
+                                                <td className="py-1.5 px-2 font-bold text-slate-700">{brandName}</td>
+                                                <td className="py-1.5 px-2 text-right font-mono text-slate-600">RM {s.salesAmount.toFixed(2)}</td>
+                                                <td className="py-1.5 px-2 text-center font-mono text-slate-600">{s.quantitySold} sold</td>
+                                                <td className="py-1.5 px-2 text-right font-mono text-amber-700">
+                                                  {hasOverride ? (
+                                                    <span className="bg-amber-50 px-1 py-0.5 rounded border border-amber-100 font-bold text-amber-800">
+                                                      Yes (RM {s.mtdSalesAmount?.toFixed(0)} / {s.mtdQuantitySold} sold)
+                                                    </span>
+                                                  ) : (
+                                                    <span className="text-slate-350">—</span>
+                                                  )}
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          });
+                        })()
+                      )}
+
+                      {/* GROUP BY BRAND */}
+                      {datasetGrouping === 'byBrand' && (
+                        (() => {
+                          const prevDates = getPrevDaysInActiveMonth();
+                          const filteredBrands = brands.filter(b => b.name.toLowerCase().includes(datasetViewerSearch.toLowerCase()));
+                          
+                          if (filteredBrands.length === 0) {
+                            return (
+                              <div className="py-8 text-center text-slate-400 text-xs font-medium font-sans">
+                                No matching brand categories found.
+                              </div>
+                            );
+                          }
+
+                          return filteredBrands.map((brand) => {
+                            const isExpanded = !!expandedBrands[brand.id];
+                            
+                            // All entries for this brand on preceding dates
+                            const brandEntries = monthlySales.filter(s => s.brandId === brand.id && prevDates.includes(s.date));
+                            const daysWithSales = brandEntries.filter(s => s.salesAmount > 0 || s.quantitySold > 0).length;
+                            
+                            // Calculate periodic total
+                            const totalSales = brandEntries.reduce((sum, s) => sum + s.salesAmount, 0);
+                            const totalQty = brandEntries.reduce((sum, s) => sum + s.quantitySold, 0);
+
+                            return (
+                              <div key={brand.id} className="border border-slate-150 rounded-xl overflow-hidden bg-white shadow-2xs">
+                                <div 
+                                  onClick={() => toggleBrandExpanded(brand.id)}
+                                  className="p-3.5 hover:bg-slate-50/80 transition-colors cursor-pointer flex items-center justify-between gap-4 select-none"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    {isExpanded ? (
+                                      <ChevronUp className="w-4 h-4 text-emerald-600 shrink-0" />
+                                    ) : (
+                                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                                    )}
+                                    <span className="font-bold text-slate-850 text-xs">
+                                      {brand.name}
+                                    </span>
+                                    {daysWithSales > 0 ? (
+                                      <span className="text-[10px] bg-emerald-50 text-emerald-800 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                                        {daysWithSales} days logged
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] bg-slate-100 text-slate-450 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                                        empty brand
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="text-right text-xs font-semibold text-slate-500 font-mono">
+                                    <span className="font-bold text-slate-700">RM {totalSales.toFixed(2)}</span>
+                                    <span className="text-slate-350 ml-1.5 mr-1.5">•</span>
+                                    <span>{totalQty} sold</span>
+                                  </div>
+                                </div>
+
+                                {isExpanded && (
+                                  <div className="border-t border-slate-100 p-3 bg-slate-50/30">
+                                    {brandEntries.length === 0 ? (
+                                      <div className="py-4 text-center text-slate-400 text-[11px] font-medium font-sans">
+                                        No daily logs found for this brand in the period.
+                                      </div>
+                                    ) : (
+                                      <div className="overflow-x-auto">
+                                        <table className="w-full text-left border-collapse text-2xs">
+                                          <thead>
+                                            <tr className="border-b border-slate-150 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+                                              <th className="py-1.5 px-2">Reporting Date</th>
+                                              <th className="py-1.5 px-2 text-right">Daily Sales</th>
+                                              <th className="py-1.5 px-2 text-center">Daily Qty</th>
+                                              <th className="py-1.5 px-2 text-right">Running Sales Total</th>
+                                              <th className="py-1.5 px-2 text-right">MTD Override</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-slate-100 bg-white">
+                                            {(() => {
+                                              // Sort brand entries chronologically for natural timeline
+                                              const sortedEntries = [...brandEntries].sort((a, b) => a.date.localeCompare(b.date));
+                                              let runningSalesSum = 0;
+                                              
+                                              return sortedEntries.map((s) => {
+                                                runningSalesSum += s.salesAmount;
+                                                const hasOverride = s.mtdSalesAmount !== undefined || s.mtdQuantitySold !== undefined;
+                                                return (
+                                                  <tr key={s.id} className="hover:bg-slate-50/40 font-medium">
+                                                    <td className="py-1.5 px-2 font-bold text-slate-700">{formatPrettyDate(s.date)}</td>
+                                                    <td className="py-1.5 px-2 text-right font-mono text-slate-600 font-bold">RM {s.salesAmount.toFixed(2)}</td>
+                                                    <td className="py-1.5 px-2 text-center font-mono text-slate-600">{s.quantitySold} sold</td>
+                                                    <td className="py-1.5 px-2 text-right font-mono font-bold text-emerald-700">RM {runningSalesSum.toFixed(2)}</td>
+                                                    <td className="py-1.5 px-2 text-right font-mono text-amber-700">
+                                                      {hasOverride ? (
+                                                        <span className="bg-amber-50 px-1 py-0.5 rounded border border-amber-100 font-bold text-amber-800">
+                                                          RM {s.mtdSalesAmount?.toFixed(0)}
+                                                        </span>
+                                                      ) : (
+                                                        <span className="text-slate-350">—</span>
+                                                      )}
+                                                    </td>
+                                                  </tr>
+                                                );
+                                              });
+                                            })()}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          });
+                        })()
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-4 animate-fade-in text-left">
+                      {/* Copy Action Banner */}
+                      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-emerald-50/60 p-4 rounded-xl border border-emerald-150">
+                        <div className="flex gap-2.5 items-start">
+                          <span className="text-xl">📢</span>
+                          <div className="text-xs text-slate-600 font-medium leading-relaxed">
+                            <span className="font-bold text-emerald-900 block mb-0.5">Copy & Share directly with your group</span>
+                            This template is formatted precisely with brackets, stars, and bullet points for elegant rendering as a native WhatsApp message list.
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCopyWhatsAppDataset}
+                          className={`py-2 px-4 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer select-none active:scale-97 shrink-0 ${
+                            datasetCopied
+                              ? 'bg-emerald-750 text-white hover:bg-emerald-800'
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          }`}
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>{datasetCopied ? '✓ Copied Message!' : 'Copy WhatsApp Message'}</span>
+                        </button>
+                      </div>
+
+                      {/* Live WhatsApp Mockup Frame */}
+                      <div className="p-4 sm:p-6 bg-[#efeae2] rounded-2xl border border-slate-200.5 shadow-inner relative overflow-hidden min-h-[300px]">
+                        {/* WhatsApp bubble aligned to right */}
+                        <div className="relative z-10 flex justify-end">
+                          <div className="bg-[#d9fdd3] text-slate-800 rounded-2xl rounded-tr-none px-4 py-3.5 shadow-sm max-w-xl w-full relative border border-[#c1f8b6]">
+                            {/* WhatsApp bubble triangle tip */}
+                            <div className="absolute right-[-7px] top-0 w-0 h-0 border-t-[10px] border-t-[#d9fdd3] border-r-[10px] border-r-transparent"></div>
+                            
+                            {/* Content Body */}
+                            <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed text-slate-800 tracking-normal select-text break-words">
+                              {generateWhatsAppDatasetText()}
+                            </pre>
+                            
+                            {/* Footer timestamp and double-check read tick */}
+                            <div className="flex items-center justify-end gap-1 mt-3 text-[9px] text-slate-400 font-bold select-none">
+                              <span>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                              <span className="text-[#53bdeb] font-extrabold flex">
+                                <span>✓</span><span className="-ml-0.5">✓</span>
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {showMonthlyTotalsPanel && (
+              <div className="bg-white rounded-2xl border border-indigo-150 shadow-md overflow-hidden">
+                <div className="p-4 bg-gradient-to-r from-slate-50 via-slate-50/50 to-indigo-50/40 flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-indigo-100">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-lg shadow-2xs">
+                      📊
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-sm">Monthly Totals Editor</h3>
+                      <p className="text-xs text-slate-500 font-medium">Manually adjust or correct cumulative Month-To-Date (MTD) totals for the active date ({selectedDate}) if anything went wrong.</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowMonthlyTotalsPanel(false)}
+                    className="p-1 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-400 hover:text-slate-700 text-xs font-bold rounded-lg cursor-pointer"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div className="p-5 flex flex-col gap-4">
+                  {/* Brand Table Search */}
+                  <div className="flex items-center gap-3 bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-2xs">
+                    <Search className="w-4 h-4 text-slate-400 shrink-0" />
+                    <input
+                      type="text"
+                      placeholder="Filter brand categories..."
+                      value={monthlyTotalsSearch}
+                      onChange={(e) => setMonthlyTotalsSearch(e.target.value)}
+                      className="w-full text-xs bg-transparent outline-none placeholder:text-slate-400 font-medium text-slate-700"
+                    />
+                    {monthlyTotalsSearch && (
                       <button
                         type="button"
-                        onClick={loadJune12Example}
-                        className="text-[10px] text-indigo-600 font-bold bg-indigo-55 hover:bg-indigo-100/80 px-2 py-1 rounded transition-all active:scale-95 cursor-pointer"
+                        onClick={() => setMonthlyTotalsSearch('')}
+                        className="text-slate-400 hover:text-slate-600 text-xs font-medium cursor-pointer"
                       >
-                        Load June 12 Report Paste Example
+                        Clear
                       </button>
-                    </label>
-                    <textarea
-                      rows={8}
-                      placeholder="Paste your daily text here..."
-                      value={rawTextToImport}
-                      onChange={(e) => setRawTextToImport(e.target.value)}
-                      className="w-full text-xs font-mono font-medium p-3.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 placeholder:font-sans placeholder:text-slate-400"
-                    />
+                    )}
                   </div>
 
-                  <div className="flex gap-3 justify-end">
+                  {/* Grid of Brand Inputs */}
+                  <div className="border border-slate-150 rounded-xl overflow-hidden max-h-[300px] overflow-y-auto bg-slate-50/20">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100/80 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                          <th className="py-2 px-4">Brand Category</th>
+                          <th className="py-2 px-4 text-slate-500 font-semibold text-center w-[120px]">Calculated MTD</th>
+                          <th className="py-2 px-4 w-[160px]">Manual MTD Net Sales</th>
+                          <th className="py-2 px-4 w-[140px]">Manual MTD Quantity</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {brands
+                          .filter(b => b.name.toLowerCase().includes(monthlyTotalsSearch.toLowerCase()))
+                          .map((brand) => {
+                            const calculated = getCalculatedMTD(brand.id);
+                            const currentOverrideSales = dailySalesInputs[brand.id]?.mtdSalesAmount || '';
+                            const currentOverrideQty = dailySalesInputs[brand.id]?.mtdQuantitySold || '';
+                            
+                            const hasOverride = currentOverrideSales !== '' || currentOverrideQty !== '';
+                            
+                            return (
+                              <tr key={brand.id} className={`hover:bg-slate-50/50 transition-colors ${hasOverride ? 'bg-amber-50/15' : ''}`}>
+                                <td className="py-2.5 px-4">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-slate-700">{brand.name}</span>
+                                    {hasOverride && (
+                                      <span className="text-[9px] font-extrabold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-md uppercase tracking-wider">
+                                        Override Active
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-4 text-center">
+                                  <div className="text-[10px] font-semibold text-slate-400 leading-normal">
+                                    RM {calculated.salesAmount.toFixed(2)}
+                                  </div>
+                                  <div className="text-[9px] font-medium text-slate-400">
+                                    {calculated.quantitySold} sold
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-4">
+                                  <div className="relative max-w-[140px]">
+                                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-2xs font-extrabold text-slate-400">RM</span>
+                                    <input
+                                      type="text"
+                                      placeholder="No override"
+                                      value={currentOverrideSales}
+                                      onChange={(e) => handleMonthlyOverrideChange(brand.id, 'mtdSalesAmount', e.target.value)}
+                                      className="w-full text-right text-xs font-semibold bg-slate-50/50 border border-slate-200 rounded-lg pl-7 pr-2.5 py-1.5 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500"
+                                    />
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-4">
+                                  <input
+                                    type="text"
+                                    placeholder="No override"
+                                    value={currentOverrideQty}
+                                    onChange={(e) => handleMonthlyOverrideChange(brand.id, 'mtdQuantitySold', e.target.value)}
+                                    className="w-full text-center text-xs font-semibold bg-slate-50/50 border border-slate-200 rounded-lg px-2.5 py-1.5 max-w-[110px] outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500"
+                                  />
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        {brands.filter(b => b.name.toLowerCase().includes(monthlyTotalsSearch.toLowerCase())).length === 0 && (
+                          <tr>
+                            <td colSpan={4} className="py-8 text-center text-slate-400 text-xs font-medium">
+                              No matching brand categories found.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Actions Row */}
+                  <div className="flex gap-3 justify-end border-t border-slate-100 pt-3">
                     <button
                       type="button"
-                      onClick={() => setRawTextToImport('')}
-                      className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 hover:text-slate-800 text-slate-500 text-xs font-bold rounded-xl transition-all active:scale-97 cursor-pointer"
+                      onClick={() => {
+                        if (window.confirm("Are you sure you want to clear all manual monthly overrides for this date? The system will revert to dynamically summing daily entries.")) {
+                          const updated = { ...dailySalesInputs };
+                          brands.forEach(b => {
+                            if (updated[b.id]) {
+                              updated[b.id] = {
+                                ...updated[b.id],
+                                mtdSalesAmount: '',
+                                mtdQuantitySold: ''
+                              };
+                            }
+                          });
+                          setDailySalesInputs(updated);
+                        }
+                      }}
+                      className="py-2 px-4 bg-slate-100 hover:bg-slate-250 hover:text-slate-800 text-slate-550 text-xs font-bold rounded-xl transition-all active:scale-97 cursor-pointer"
                     >
-                      Clear
+                      Clear Monthly Overrides
                     </button>
                     <button
                       type="button"
-                      onClick={handleImportReport}
-                      className="py-2.5 px-5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-md active:scale-97 cursor-pointer flex items-center gap-1.5"
+                      disabled={loading}
+                      onClick={handleSaveMonthlyOverrides}
+                      className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-md active:scale-97 cursor-pointer flex items-center gap-1.5"
                     >
-                      <span>Analyze & Load Report</span>
-                      <Check className="w-3.5 h-3.5" />
+                      <span>Save Monthly Overrides</span>
+                      <Check className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+
 
             {/* INTERACTIVE BRAND SELECTOR & KEY-IN PANEL (MULTI-SELECT SUPPORTED) */}
             <div id="brand-keyin-panel" className="bg-white p-5 rounded-2xl border border-indigo-150 shadow-md relative overflow-hidden transition-all duration-300">
@@ -885,7 +1468,9 @@ Total 1-12 Jun 26
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
                         {brands.map((b) => {
                           const isSelected = selectedBrandIds.includes(b.id);
-                          const hasValues = parseFloat(dailySalesInputs[b.id]?.salesAmount || '0') > 0 || parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10) > 0;
+                          const hasDaily = parseFloat(dailySalesInputs[b.id]?.salesAmount || '0') > 0 || parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10) > 0;
+                          const hasMtd = parseFloat(dailySalesInputs[b.id]?.mtdSalesAmount || '0') > 0 || parseInt(dailySalesInputs[b.id]?.mtdQuantitySold || '0', 10) > 0;
+                          const hasValues = hasDaily || hasMtd;
                           return (
                             <button
                               key={b.id}
@@ -907,8 +1492,13 @@ Total 1-12 Jun 26
                               )}
                               <span className="truncate max-w-full">{b.name}</span>
                               {hasValues && (
-                                <span className="text-[9px] text-emerald-650 opacity-90 font-semibold uppercase mt-0.5 tracking-tight">
-                                  RM {parseFloat(dailySalesInputs[b.id]?.salesAmount || '0').toFixed(0)} ({parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10)}⌚)
+                                <span className="text-[9px] text-emerald-650 opacity-90 font-semibold uppercase mt-0.5 tracking-tight flex flex-col items-center">
+                                  {hasDaily && (
+                                    <span>T: RM {parseFloat(dailySalesInputs[b.id]?.salesAmount || '0').toFixed(0)} ({parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10)}⌚)</span>
+                                  )}
+                                  {hasMtd && (
+                                    <span>M: RM {parseFloat(dailySalesInputs[b.id]?.mtdSalesAmount || '0').toFixed(0)} ({parseInt(dailySalesInputs[b.id]?.mtdQuantitySold || '0', 10)}⌚)</span>
+                                  )}
                                 </span>
                               )}
                             </button>
@@ -928,7 +1518,7 @@ Total 1-12 Jun 26
                           </span>
                           <button
                             type="button"
-                            onClick={handleClearSelectionState}
+                            onClick={() => { setSelectedBrandIds([]); setWizardInputs({}); }}
                             className="text-slate-400 hover:text-rose-600 font-bold ml-1 hover:underline transition-all cursor-pointer"
                           >
                             Clear All selection
@@ -982,36 +1572,65 @@ Total 1-12 Jun 26
                           className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center bg-white p-3.5 rounded-xl border border-slate-150/80 shadow-2xs hover:border-indigo-200 transition-all group duration-200"
                         >
                           {/* Brand Info */}
-                          <div className="md:col-span-4 flex items-center gap-2.5">
+                          <div className="md:col-span-3 flex items-center gap-2.5">
                             <span className="w-5.5 h-5.5 bg-indigo-50 text-indigo-600 rounded-md flex items-center justify-center font-bold text-[10px]">
                               {idx + 1}
                             </span>
                             <span className="font-bold text-slate-800 text-sm truncate">{brandName}</span>
                           </div>
 
-                          {/* Sales Input */}
-                          <div className="md:col-span-4">
-                            <div className="relative">
-                              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">RM</span>
+                          {/* Daily Input row of 2 */}
+                          <div className="md:col-span-4 grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Today Sales</label>
+                              <div className="relative">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">RM</span>
+                                <input
+                                  type="text"
+                                  placeholder="0.00"
+                                  value={wizardInputs[bId]?.salesAmount || ''}
+                                  onChange={(e) => handleWizardInputChange(bId, 'salesAmount', e.target.value)}
+                                  className="wizard-sales-input w-full text-right text-xs font-semibold bg-slate-50/50 border border-slate-200 rounded-lg pl-7 pr-2 py-1.5 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Today Qty</label>
                               <input
                                 type="text"
-                                placeholder="0.00"
-                                value={wizardInputs[bId]?.salesAmount || ''}
-                                onChange={(e) => handleWizardInputChange(bId, 'salesAmount', e.target.value)}
-                                className="wizard-sales-input w-full text-right text-xs font-semibold bg-slate-50/50 border border-slate-200 rounded-lg pl-9 pr-3 py-2 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500"
+                                placeholder="0"
+                                value={wizardInputs[bId]?.quantitySold || ''}
+                                onChange={(e) => handleWizardInputChange(bId, 'quantitySold', e.target.value)}
+                                className="w-full text-center text-xs font-semibold bg-slate-50/50 border border-slate-200 rounded-lg py-1.5 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500"
                               />
                             </div>
                           </div>
 
-                          {/* Quantity Input */}
-                          <div className="md:col-span-3">
-                            <input
-                              type="text"
-                              placeholder="0"
-                              value={wizardInputs[bId]?.quantitySold || ''}
-                              onChange={(e) => handleWizardInputChange(bId, 'quantitySold', e.target.value)}
-                              className="w-full text-center text-xs font-semibold bg-slate-50/50 border border-slate-200 rounded-lg py-2 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500"
-                            />
+                          {/* MTD Input row of 2 */}
+                          <div className="md:col-span-4 grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">MTD Sales</label>
+                              <div className="relative">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">RM</span>
+                                <input
+                                  type="text"
+                                  placeholder="0.00"
+                                  value={wizardInputs[bId]?.mtdSalesAmount || ''}
+                                  onChange={(e) => handleWizardInputChange(bId, 'mtdSalesAmount', e.target.value)}
+                                  className="w-full text-right text-xs font-semibold bg-slate-50/50 border border-slate-200 rounded-lg pl-7 pr-2 py-1.5 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">MTD Qty</label>
+                              <input
+                                type="text"
+                                placeholder="0"
+                                value={wizardInputs[bId]?.mtdQuantitySold || ''}
+                                onChange={(e) => handleWizardInputChange(bId, 'mtdQuantitySold', e.target.value)}
+                                className="w-full text-center text-xs font-semibold bg-slate-50/50 border border-slate-200 rounded-lg py-1.5 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500"
+                              />
+                            </div>
                           </div>
 
                           {/* Fast Close Button (In case of user error / tapping wrong brand in Step 1) */}
@@ -1117,7 +1736,9 @@ Total 1-12 Jun 26
 
                     return filteredBrands.map((brand) => {
                       const savedMtd = getBrandMTD(brand.id);
-                      const hasValues = parseFloat(dailySalesInputs[brand.id]?.salesAmount || '0') > 0 || parseInt(dailySalesInputs[brand.id]?.quantitySold || '0', 10) > 0;
+                      const hasDaily = parseFloat(dailySalesInputs[brand.id]?.salesAmount || '0') > 0 || parseInt(dailySalesInputs[brand.id]?.quantitySold || '0', 10) > 0;
+                      const hasMtdInput = parseFloat(dailySalesInputs[brand.id]?.mtdSalesAmount || '0') > 0 || parseInt(dailySalesInputs[brand.id]?.mtdQuantitySold || '0', 10) > 0;
+                      const hasValues = hasDaily || hasMtdInput;
                       
                       return (
                         <div 
@@ -1135,7 +1756,7 @@ Total 1-12 Jun 26
                             <div className="flex items-center gap-2">
                               <span className="font-bold text-slate-800 text-base">{brand.name}</span>
                               {hasValues && (
-                                <span className="inline-block w-2 h-2 rounded-full bg-indigo-500" title="Values keyed in for today" />
+                                <span className="inline-block w-2.5 h-2.5 rounded-full bg-indigo-500" title="Values keyed in" />
                               )}
                             </div>
                             
@@ -1149,19 +1770,25 @@ Total 1-12 Jun 26
                             </div>
                           </div>
 
-                          {/* Displays Selected Daily Metrics */}
+                          {/* Displays Selected Daily & Direct MTD Metrics */}
                           <div className="flex items-center gap-6 justify-start md:justify-end flex-wrap">
-                            <div className="flex items-baseline gap-1.5">
-                              <span className="text-2xs font-bold text-slate-400 uppercase tracking-wide">Sales Total:</span>
-                              <span className={`font-mono text-sm font-bold ${hasValues ? 'text-slate-800' : 'text-slate-400'}`}>
-                                RM {parseFloat(dailySalesInputs[brand.id]?.salesAmount || '0').toFixed(2)}
+                            {/* Today stats block */}
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Today's Sales</span>
+                              <span className={`font-mono text-xs font-bold ${hasDaily ? 'text-slate-800' : 'text-slate-400 font-normal shadow-3xs'}`}>
+                                RM {parseFloat(dailySalesInputs[brand.id]?.salesAmount || '0').toFixed(2)} ({parseInt(dailySalesInputs[brand.id]?.quantitySold || '0', 10)} sold)
                               </span>
                             </div>
 
-                            <div className="flex items-baseline gap-1.5">
-                              <span className="text-2xs font-bold text-slate-400 uppercase tracking-wide font-medium">Quantity:</span>
-                              <span className={`font-mono text-sm font-bold ${hasValues ? 'text-slate-800' : 'text-slate-400'}`}>
-                                {parseInt(dailySalesInputs[brand.id]?.quantitySold || '0', 10)} sold
+                            {/* Direct MTD stats block */}
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">MTD Input Override</span>
+                              <span className={`font-mono text-xs font-bold ${hasMtdInput ? 'text-indigo-650' : 'text-slate-400 font-normal shadow-3xs'}`}>
+                                {hasMtdInput ? (
+                                  <span>RM {parseFloat(dailySalesInputs[brand.id]?.mtdSalesAmount || '0').toFixed(2)} ({parseInt(dailySalesInputs[brand.id]?.mtdQuantitySold || '0', 15)} sold)</span>
+                                ) : (
+                                  <span>none</span>
+                                )}
                               </span>
                             </div>
 
@@ -1182,7 +1809,7 @@ Total 1-12 Jun 26
                                   onClick={() => {
                                     setDailySalesInputs(prev => ({
                                       ...prev,
-                                      [brand.id]: { salesAmount: '', quantitySold: '' }
+                                      [brand.id]: { salesAmount: '', quantitySold: '', mtdSalesAmount: '', mtdQuantitySold: '' }
                                     }));
                                   }}
                                   title="Clear Entry"

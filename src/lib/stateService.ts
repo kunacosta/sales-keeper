@@ -22,12 +22,16 @@ export interface DailySale {
   brandId: string;
   salesAmount: number;
   quantitySold: number;
+  mtdSalesAmount?: number;
+  mtdQuantitySold?: number;
 }
 
 export interface SalesInput {
   brandId: string;
   salesAmount: number;
   quantitySold: number;
+  mtdSalesAmount?: number;
+  mtdQuantitySold?: number;
 }
 
 const SEED_BRANDS = [
@@ -283,7 +287,9 @@ export const stateService = {
           date: d.date || date,
           brandId: d.brandId || '',
           salesAmount: typeof d.salesAmount === 'number' ? d.salesAmount : 0,
-          quantitySold: typeof d.quantitySold === 'number' ? d.quantitySold : 0
+          quantitySold: typeof d.quantitySold === 'number' ? d.quantitySold : 0,
+          mtdSalesAmount: typeof d.mtdSalesAmount === 'number' ? d.mtdSalesAmount : undefined,
+          mtdQuantitySold: typeof d.mtdQuantitySold === 'number' ? d.mtdQuantitySold : undefined
         });
       });
       return list;
@@ -308,7 +314,9 @@ export const stateService = {
         date,
         brandId: input.brandId,
         salesAmount: input.salesAmount,
-        quantitySold: input.quantitySold
+        quantitySold: input.quantitySold,
+        mtdSalesAmount: input.mtdSalesAmount,
+        mtdQuantitySold: input.mtdQuantitySold
       };
       return record;
     });
@@ -324,12 +332,19 @@ export const stateService = {
       const batch = writeBatch(db);
       recordsToSave.forEach((record) => {
         const ref = doc(db, 'daily_sales', record.id);
-        batch.set(ref, {
+        const dataToSave: any = {
           date: record.date,
           brandId: record.brandId,
           salesAmount: record.salesAmount,
           quantitySold: record.quantitySold
-        });
+        };
+        if (record.mtdSalesAmount !== undefined) {
+          dataToSave.mtdSalesAmount = record.mtdSalesAmount;
+        }
+        if (record.mtdQuantitySold !== undefined) {
+          dataToSave.mtdQuantitySold = record.mtdQuantitySold;
+        }
+        batch.set(ref, dataToSave);
       });
       await batch.commit();
     } catch (err) {
@@ -366,7 +381,9 @@ export const stateService = {
           date: d.date || '',
           brandId: d.brandId || '',
           salesAmount: typeof d.salesAmount === 'number' ? d.salesAmount : 0,
-          quantitySold: typeof d.quantitySold === 'number' ? d.quantitySold : 0
+          quantitySold: typeof d.quantitySold === 'number' ? d.quantitySold : 0,
+          mtdSalesAmount: typeof d.mtdSalesAmount === 'number' ? d.mtdSalesAmount : undefined,
+          mtdQuantitySold: typeof d.mtdQuantitySold === 'number' ? d.mtdQuantitySold : undefined
         });
       });
       return list;
