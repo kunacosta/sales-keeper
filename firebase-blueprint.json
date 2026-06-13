@@ -1,0 +1,55 @@
+{
+  "entities": {
+    "Brand": {
+      "title": "Brand",
+      "description": "Represents product categories and sorted brands that can be tracked",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique name of the brand category"
+        },
+        "sortOrder": {
+          "type": "number",
+          "description": "Sorting precedence index"
+        }
+      },
+      "required": ["name", "sortOrder"]
+    },
+    "DailySale": {
+      "title": "DailySale",
+      "description": "Individual daily sales report entry per brand category",
+      "type": "object",
+      "properties": {
+        "date": {
+          "type": "string",
+          "format": "date",
+          "description": "Format YYYY-MM-DD representing the day of the sale"
+        },
+        "brandId": {
+          "type": "string",
+          "description": "The unique ID matching the brand document"
+        },
+        "salesAmount": {
+          "type": "number",
+          "description": "Cumulative sale amount in RM decimals"
+        },
+        "quantitySold": {
+          "type": "number",
+          "description": "Total count/quantity of specific products sold"
+        }
+      },
+      "required": ["date", "brandId", "salesAmount", "quantitySold"]
+    }
+  },
+  "firestore": {
+    "brands": {
+      "schema": "Brand",
+      "description": "Collection of all structured brand catalog categories"
+    },
+    "daily_sales": {
+      "schema": "DailySale",
+      "description": "Consolidated record of modern daily track reports"
+    }
+  }
+}

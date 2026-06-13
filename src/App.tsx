@@ -210,8 +210,7 @@ export default function App() {
       });
 
       // 3. Construct specific template
-      let report = `✅ Saved!\n\n`;
-      report += `${dayNum} ${formattedMonth} ${yearNum}(MRT)\n`;
+      let report = `${dayNum} ${formattedMonth} ${yearNum}(MRT)\n`;
       report += `*Sale RM ${dailyTotalSales.toFixed(2)}\n\n`;
 
       brands.forEach((b) => {

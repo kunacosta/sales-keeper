@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Catch-all safety net (denies everything else as a zero-trust fallback)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // High performance general purpose ID validation helper
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // ==========================================
+    // BRANDS collection validation and constraints
+    // ==========================================
+    function isValidBrand(data) {
+      return data.keys().hasAll(['name', 'sortOrder'])
+        && data.keys().size() == 2
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 200
+        && data.sortOrder is int;
+    }
+
+    match /brands/{brandId} {
+      allow read: if true;
+      allow create: if isValidBrand(incoming()) && isValidId(brandId);
+      allow update: if isValidBrand(incoming()) && isValidId(brandId);
+      allow delete: if true;
+    }
+
+    // ==========================================
+    // DAILY_SALES collection validation and constraints
+    // ==========================================
+    function isValidDailySale(data) {
+      return data.keys().hasAll(['date', 'brandId', 'salesAmount', 'quantitySold'])
+        && data.keys().size() == 4
+        && data.date is string
+        && data.date.size() == 10
+        && data.brandId is string
+        && (data.salesAmount is float || data.salesAmount is int)
+        && data.salesAmount >= 0
+        && data.quantitySold is int
+        && data.quantitySold >= 0;
+    }
+
+    match /daily_sales/{saleId} {
+      allow read: if true;
+      allow create: if isValidDailySale(incoming()) && isValidId(saleId);
+      allow update: if isValidDailySale(incoming()) && isValidId(saleId);
+      allow delete: if true;
+    }
+  }
+}

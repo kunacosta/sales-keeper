@@ -16,8 +16,8 @@ if (getApps().length === 0) {
   app = getApp();
 }
 
-// Export the Firebase instances, guarding them if still configured with placeholder credentials
-export const db = isPlaceholder ? null : getFirestore(app);
+// Export the Firebase instances, with firestoreDatabaseId specified to target the dedicated database
+export const db = isPlaceholder ? null : getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = isPlaceholder ? null : getAuth(app);
 export { isPlaceholder };
 export default app;
