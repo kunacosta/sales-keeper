@@ -101,6 +101,7 @@ const StatCard = ({ title, value, icon: Icon, colorClass, suffix = "" }: { title
 export default function App() {
   // Navigation & UI State
   const [activeTab, setActiveTab] = useState<'dashboard' | 'admin'>('dashboard');
+  const [entryMode, setEntryMode] = useState<'ops' | 'audit'>('ops'); // ops = daily, audit = MTD override
   const [isSyncing, setIsSyncing] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
   const [showMobileReceipt, setShowMobileReceipt] = useState(false);
@@ -128,16 +129,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    refreshData(entryDate);
-  }, [entryDate]);
+    refreshData(entryDate, entryMode);
+  }, [entryDate, entryMode]);
 
   const loadData = async () => {
     const b = await stateService.getBrands();
     setBrands(b);
-    await refreshData(getTodayStr());
+    await refreshData(getTodayStr(), entryMode);
   };
 
-  const refreshData = async (date: string) => {
+  const refreshData = async (date: string, mode: 'ops' | 'audit') => {
     const mSales = await stateService.getMonthlySales(date.substring(0, 7));
     setMonthlySales(mSales);
     
@@ -145,10 +146,17 @@ export default function App() {
     const dayStats = stateService.getDashboardStats(date);
     const newDraft: Record<string, { rm: string, qty: string }> = {};
     Object.entries(dayStats).forEach(([id, s]) => {
-      newDraft[id] = { 
-        rm: s.dailyRM > 0 ? s.dailyRM.toString() : '', 
-        qty: s.dailyQty > 0 ? s.dailyQty.toString() : '' 
-      };
+      if (mode === 'ops') {
+        newDraft[id] = { 
+          rm: s.dailyRM > 0 ? s.dailyRM.toString() : '', 
+          qty: s.dailyQty > 0 ? s.dailyQty.toString() : '' 
+        };
+      } else {
+        newDraft[id] = { 
+          rm: s.mtdRM > 0 ? s.mtdRM.toString() : '', 
+          qty: s.mtdQty > 0 ? s.mtdQty.toString() : '' 
+        };
+      }
     });
     setDraftSales(newDraft);
     setIsDirty(false);
@@ -254,15 +262,32 @@ export default function App() {
 
   const handleGlobalSave = async () => {
     try {
-      const salesInputs: SalesInput[] = Object.entries(draftSales).map(([brandId, vals]) => ({
-        brandId,
-        salesAmount: parseFloat(vals.rm) || 0,
-        quantitySold: parseInt(vals.qty) || 0
-      }));
+      const salesInputs: SalesInput[] = Object.entries(draftSales).map(([brandId, vals]) => {
+        const input: SalesInput = {
+          brandId,
+          salesAmount: 0,
+          quantitySold: 0
+        };
+
+        if (entryMode === 'ops') {
+          input.salesAmount = parseFloat(vals.rm) || 0;
+          input.quantitySold = parseInt(vals.qty) || 0;
+        } else {
+          // Audit Mode: Set overrides
+          input.mtdSalesAmount = parseFloat(vals.rm) || 0;
+          input.mtdQuantitySold = parseInt(vals.qty) || 0;
+          
+          // Preserve existing daily values for that date
+          const currentDay = stats.brandStats[brandId];
+          input.salesAmount = currentDay?.dailyRM || 0;
+          input.quantitySold = currentDay?.dailyQty || 0;
+        }
+        return input;
+      });
       
       await stateService.saveDailySales(entryDate, salesInputs);
-      await refreshData(entryDate);
-      showStatus('success', 'Command Center Synced');
+      await refreshData(entryDate, entryMode);
+      showStatus('success', entryMode === 'ops' ? 'Command Center Synced' : 'MTD Overrides Applied');
     } catch (err) {
       showStatus('error', 'Sync Failed');
     }
@@ -294,15 +319,35 @@ export default function App() {
         {/* The Grid */}
         <GlassCard className="flex-1 flex flex-col shadow-2xl border-white/5">
           <div className="p-4 border-b border-white/5 flex flex-col sm:flex-row gap-4 items-center justify-between bg-white/[0.02]">
-             <div className="flex items-center gap-2 bg-[#020617] p-2 px-4 rounded-2xl border border-white/10 group focus-within:border-indigo-500/50 transition-all">
-                <Calendar className="w-4 h-4 text-indigo-400" />
-                <input 
-                  type="date" 
-                  value={entryDate} 
-                  onChange={e => setEntryDate(e.target.value)}
-                  className="bg-transparent text-white outline-none text-xs font-mono uppercase font-bold"
-                />
-              </div>
+             <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 bg-[#020617] p-2 px-4 rounded-2xl border border-white/10 group focus-within:border-indigo-500/50 transition-all">
+                  <Calendar className="w-4 h-4 text-indigo-400" />
+                  <input 
+                    type="date" 
+                    value={entryDate} 
+                    onChange={e => setEntryDate(e.target.value)}
+                    className="bg-transparent text-white outline-none text-xs font-mono uppercase font-bold"
+                  />
+                </div>
+                
+                {/* Audit Mode Toggle */}
+                <div className="flex bg-[#020617] border border-white/10 p-1 rounded-2xl">
+                  <button 
+                    onClick={() => setEntryMode('ops')}
+                    title="Daily Sales Mode"
+                    className={`p-2 rounded-xl transition-all ${entryMode === 'ops' ? 'bg-indigo-500 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    <Package className="w-4 h-4" />
+                  </button>
+                  <button 
+                    onClick={() => setEntryMode('audit')}
+                    title="Monthly Audit Mode"
+                    className={`p-2 rounded-xl transition-all ${entryMode === 'audit' ? 'bg-amber-500 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    <History className="w-4 h-4" />
+                  </button>
+                </div>
+             </div>
               <div className="relative w-full sm:w-64">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                 <input 
@@ -320,14 +365,22 @@ export default function App() {
               <thead>
                 <tr className="bg-white/[0.01] border-b border-white/5">
                   <th className="p-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Brand</th>
-                  <th className="p-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">RM Sale</th>
-                  <th className="p-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">Quantity</th>
+                  <th className="p-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">
+                    {entryMode === 'ops' ? 'RM Sale' : 'MTD RM Override'}
+                  </th>
+                  <th className="p-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">
+                    {entryMode === 'ops' ? 'Quantity' : 'MTD QTY Override'}
+                  </th>
                   <th className="p-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-right">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.03]">
                 {filteredBrands.map(brand => {
-                  const hasData = (parseFloat(draftSales[brand.id]?.rm) || 0) > 0 || (parseInt(draftSales[brand.id]?.qty) || 0) > 0;
+                  const s = stats.brandStats[brand.id] || { dailyRM: 0, dailyQty: 0, mtdRM: 0, mtdQty: 0 };
+                  const hasData = entryMode === 'ops' 
+                    ? (parseFloat(draftSales[brand.id]?.rm) || 0) > 0 || (parseInt(draftSales[brand.id]?.qty) || 0) > 0
+                    : false; // MTD overrides are their own status
+                  
                   return (
                     <motion.tr 
                       key={brand.id}
@@ -339,7 +392,9 @@ export default function App() {
                           <span className={`text-sm font-bold transition-colors ${hasData ? 'text-emerald-400' : 'text-slate-300'}`}>
                             {brand.name}
                           </span>
-                          <span className="text-[10px] text-slate-600 font-mono">MTD: {fmt(stats.brandStats[brand.id]?.mtdRM || 0)}</span>
+                          <span className="text-[10px] text-slate-600 font-mono">
+                            {entryMode === 'ops' ? `MTD: ${fmt(s.mtdRM)}` : `Today: ${fmt(s.dailyRM)}`}
+                          </span>
                         </div>
                       </td>
                       <td className="p-2">
@@ -354,7 +409,7 @@ export default function App() {
                           onKeyDown={e => handleKeyDown(e, brand.id, 'rm')}
                           onFocus={e => e.target.select()}
                           placeholder="0.00"
-                          className="w-full bg-[#020617]/50 border border-white/5 rounded-xl p-2.5 text-center text-white font-mono text-sm focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 outline-none transition-all"
+                          className={`w-full bg-[#020617]/50 border rounded-xl p-2.5 text-center text-white font-mono text-sm outline-none transition-all ${entryMode === 'ops' ? 'border-white/5 focus:border-emerald-500/50' : 'border-amber-500/20 focus:border-amber-500/50'}`}
                         />
                       </td>
                       <td className="p-2">
@@ -368,7 +423,7 @@ export default function App() {
                           onKeyDown={e => handleKeyDown(e, brand.id, 'qty')}
                           onFocus={e => e.target.select()}
                           placeholder="0"
-                          className="w-full bg-[#020617]/50 border border-white/5 rounded-xl p-2.5 text-center text-white font-mono text-sm focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 outline-none transition-all"
+                          className={`w-full bg-[#020617]/50 border rounded-xl p-2.5 text-center text-white font-mono text-sm outline-none transition-all ${entryMode === 'ops' ? 'border-white/5 focus:border-indigo-500/50' : 'border-amber-500/20 focus:border-amber-500/50'}`}
                         />
                       </td>
                       <td className="p-4 text-right">
