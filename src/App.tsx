@@ -1,52 +1,39 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   Calendar, 
   TrendingUp, 
   Plus, 
   Minus, 
-  Eye, 
   List, 
-  Move, 
-  Trash2, 
   RotateCcw, 
   History,
   Check,
-  ChevronLeft,
   X,
   Copy,
-  ChevronRight,
   Save,
-  AlertCircle
+  AlertCircle,
+  Share2,
+  Package,
+  Clock,
+  LayoutDashboard,
+  Settings,
+  Search,
+  ArrowUpRight,
+  Database,
+  Smartphone,
+  ChevronUp,
+  CloudZap,
+  RefreshCw,
+  Hash
 } from 'lucide-react';
+import { motion, AnimatePresence, useScroll, useSpring } from 'motion/react';
 import { stateService, Brand, DailySale, SalesInput } from './lib/stateService.ts';
-
-// --- TYPES ---
-type ViewState = 
-  | 'MAIN_MENU'
-  | 'SALES_DATE_SELECT'
-  | 'SALES_CUSTOM_DATE'
-  | 'SALES_SELECT'
-  | 'SALES_CLEAR_CONFIRM'
-  | 'SALES_ENTER_RM'
-  | 'SALES_ENTER_QTY'
-  | 'SALES_SAVE_CONFIRM'
-  | 'PREVIEW_SUMMARY'
-  | 'EDIT_MONTHLY_SELECT'
-  | 'EDIT_MONTHLY_RM'
-  | 'EDIT_MONTHLY_QTY'
-  | 'ADD_BRAND'
-  | 'REMOVE_BRAND'
-  | 'VIEW_BRANDS'
-  | 'REARRANGE'
-  | 'CLEAR_ALL_CONFIRM'
-  | 'RESET_MONTHLY_CONFIRM'
-  | 'RESTORE_BACKUP_CONFIRM';
 
 // --- HELPERS ---
 const fmt = (n: number | string) => {
   const f = typeof n === 'string' ? parseFloat(n) : n;
-  if (isNaN(f)) return n;
-  return f % 1 === 0 ? f.toString() : f.toFixed(2);
+  if (isNaN(f)) return '0';
+  return f % 1 === 0 ? f.toLocaleString() : f.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 const getTodayStr = () => {
@@ -57,855 +44,652 @@ const getTodayStr = () => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
-const formatDate = (date: Date) => {
+const formatDate = (dateStr: string) => {
+  const d = new Date(dateStr);
   const options: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short', year: '2-digit' };
-  return date.toLocaleDateString('en-GB', options).replace(/ /g, ' ');
+  return d.toLocaleDateString('en-GB', options).replace(/ /g, ' ');
 };
 
-const getMonthYear = (date: Date) => {
+const getMonthYear = (dateStr: string) => {
+  const d = new Date(dateStr);
   const options: Intl.DateTimeFormatOptions = { month: 'short', year: '2-digit' };
-  return date.toLocaleDateString('en-GB', options);
+  return d.toLocaleDateString('en-GB', options);
 };
+
+// --- STYLED COMPONENTS ---
+
+const GlassCard = ({ children, className = "", onClick }: { children: React.ReactNode, className?: string, onClick?: () => void }) => (
+  <motion.div 
+    initial={{ opacity: 0, y: 20 }}
+    animate={{ opacity: 1, y: 0 }}
+    onClick={onClick}
+    className={`bg-[#0f172a]/40 backdrop-blur-xl border border-white/10 rounded-3xl overflow-hidden ${className}`}
+  >
+    {children}
+  </motion.div>
+);
+
+const StatCard = ({ title, value, icon: Icon, colorClass, suffix = "" }: { title: string, value: string | number, icon: any, colorClass: string, suffix?: string }) => (
+  <motion.div 
+    whileHover={{ scale: 1.02 }}
+    className="bg-[#0f172a]/60 backdrop-blur-xl border border-white/5 p-4 rounded-3xl flex flex-col gap-1 relative overflow-hidden group"
+  >
+    <div className={`absolute -right-2 -top-2 w-16 h-16 opacity-10 blur-2xl rounded-full ${colorClass}`} />
+    <div className="flex items-center gap-2 mb-1">
+      <div className={`p-1.5 rounded-lg ${colorClass} bg-opacity-20`}>
+        <Icon className={`w-3 h-3 ${colorClass.replace('bg-', 'text-')}`} />
+      </div>
+      <span className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">{title}</span>
+    </div>
+    <div className="flex items-baseline gap-1">
+      <motion.span 
+        key={value}
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="text-xl font-black text-white font-mono"
+      >
+        {value}
+      </motion.span>
+      {suffix && <span className="text-slate-500 text-[10px] font-mono font-bold">{suffix}</span>}
+    </div>
+    <div className={`absolute bottom-0 left-0 h-[2px] w-0 group-hover:w-full transition-all duration-500 ${colorClass}`} />
+  </motion.div>
+);
+
+// --- MAIN APP ---
 
 export default function App() {
-  // Navigation & Flow State
-  const [view, setView] = useState<ViewState>('MAIN_MENU');
-  const [loading, setLoading] = useState(false);
+  // Navigation & UI State
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'admin'>('dashboard');
+  const [isSyncing, setIsSyncing] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
+  const [showMobileReceipt, setShowMobileReceipt] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Data State
   const [brands, setBrands] = useState<Brand[]>([]);
   const [monthlySales, setMonthlySales] = useState<DailySale[]>([]);
-  
-  // Sales Flow State
   const [entryDate, setEntryDate] = useState<string>(getTodayStr());
-  const [selectedBrandIds, setSelectedBrandIds] = useState<string[]>([]);
-  const [entryIndex, setEntryIndex] = useState(0);
-  const [tempEntries, setTempEntries] = useState<Record<string, { rm: string, qty: string }>>({});
-  const [customDateInput, setCustomDateInput] = useState('');
-
-  // Brand Management State
-  const [newBrandName, setNewBrandName] = useState('');
-
-  // Edit Monthly State
-  const [editBrandIds, setEditBrandIds] = useState<string[]>([]);
-  const [editIndex, setEditIndex] = useState(0);
-  const [editTemp, setEditTemp] = useState<Record<string, { rm: string, qty: string }>>({});
+  
+  // Draft State (for real-time editing before global save)
+  const [draftSales, setDraftSales] = useState<Record<string, { rm: string, qty: string }>>({});
+  const [isDirty, setIsDirty] = useState(false);
 
   // --- INITIALIZATION ---
   useEffect(() => {
-    loadInitialData();
+    loadData();
   }, []);
 
-  const loadInitialData = async () => {
-    setLoading(true);
-    try {
-      const b = await stateService.getBrands();
-      setBrands(b);
-      const mSales = await stateService.getMonthlySales(getTodayStr().substring(0, 7));
-      setMonthlySales(mSales);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setIsSyncing(stateService.isSyncing());
+    }, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    refreshData(entryDate);
+  }, [entryDate]);
+
+  const loadData = async () => {
+    const b = await stateService.getBrands();
+    setBrands(b);
+    await refreshData(getTodayStr());
   };
 
-  const refreshMonthlyData = async (date: string) => {
+  const refreshData = async (date: string) => {
     const mSales = await stateService.getMonthlySales(date.substring(0, 7));
     setMonthlySales(mSales);
+    
+    // Initialize draft from current data
+    const dayStats = stateService.getDashboardStats(date);
+    const newDraft: Record<string, { rm: string, qty: string }> = {};
+    Object.entries(dayStats).forEach(([id, s]) => {
+      newDraft[id] = { 
+        rm: s.dailyRM > 0 ? s.dailyRM.toString() : '', 
+        qty: s.dailyQty > 0 ? s.dailyQty.toString() : '' 
+      };
+    });
+    setDraftSales(newDraft);
+    setIsDirty(false);
   };
 
-  // --- SUMMARY BUILDER ---
-  const buildSummary = (targetBrands: Brand[], salesData: DailySale[], dateStr: string) => {
-    const d = new Date(dateStr);
-    const todayStr = formatDate(d);
-    const day = d.getDate();
-    const monthYr = getMonthYear(d);
-
-    const datePrefix = dateStr.substring(0, 7);
+  // --- CALCULATIONS ---
+  const stats = useMemo(() => {
+    const brandStats = stateService.getDashboardStats(entryDate);
     
-    // We need to calculate totals
+    let todayRM = 0;
+    let todayQty = 0;
+    let monthlyRM = 0;
+
+    // Use draft values for today's totals to show live updates
+    Object.keys(draftSales).forEach(id => {
+      const d = draftSales[id];
+      todayRM += parseFloat(d.rm) || 0;
+      todayQty += parseInt(d.qty) || 0;
+    });
+
+    // MTD RM includes today's draft vs today's previous value
+    Object.values(brandStats).forEach(s => {
+      monthlyRM += s.mtdRM;
+    });
+
+    // Adjustment: Subtract old dailyRM, add draft RM for accurate MTD live view
+    Object.entries(brandStats).forEach(([id, s]) => {
+      const draftRM = parseFloat(draftSales[id]?.rm) || 0;
+      monthlyRM = monthlyRM - s.dailyRM + draftRM;
+    });
+
+    return { todayRM, todayQty, monthlyRM, brandStats };
+  }, [draftSales, entryDate, monthlySales]);
+
+  const filteredBrands = useMemo(() => {
+    return brands.filter(b => b.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  }, [brands, searchQuery]);
+
+  // --- WHATSAPP SUMMARY GENERATOR ---
+  const whatsappSummary = useMemo(() => {
+    if (brands.length === 0) return 'No data available...';
+    
+    const d = new Date(entryDate);
+    const dateLabel = formatDate(entryDate);
+    const dayNum = d.getDate();
+    const monthYr = getMonthYear(entryDate);
+
+    const brandLines: string[] = [];
     let totalDay = 0;
     let totalMon = 0;
 
-    const brandLines: string[] = [];
-    targetBrands.forEach(b => {
-      const daily = salesData.find(s => s.brandId === b.id && s.date === dateStr);
-      const dSales = daily?.salesAmount || 0;
-      const dQty = daily?.quantitySold || 0;
-      
-      // Calculate monthly
-      const mSalesList = salesData.filter(s => s.brandId === b.id && s.date.startsWith(datePrefix) && s.date <= dateStr);
-      
-      // Check for manual overrides in the monthly list
-      // If any record has mtdSalesAmount, that becomes the new baseline.
-      // But for simplicity, we follow the bot's logic: it sums or uses overrides.
-      
-      let mSalesSum = 0;
-      let mQtySum = 0;
+    brands.forEach(b => {
+      const s = stats.brandStats[b.id] || { dailyRM: 0, dailyQty: 0, mtdRM: 0, mtdQty: 0 };
+      const dRM = parseFloat(draftSales[b.id]?.rm) || 0;
+      const dQty = parseInt(draftSales[b.id]?.qty) || 0;
+      const mRM = s.mtdRM - s.dailyRM + dRM;
+      const mQty = s.mtdQty - s.dailyQty + dQty;
 
-      // Find the latest override if any
-      const latestOverride = [...mSalesList].sort((a,b) => b.date.localeCompare(a.date)).find(s => s.mtdSalesAmount !== undefined);
-      
-      if (latestOverride) {
-        mSalesSum = latestOverride.mtdSalesAmount || 0;
-        mQtySum = latestOverride.mtdQuantitySold || 0;
-      } else {
-        mSalesSum = mSalesList.reduce((acc, s) => acc + s.salesAmount, 0);
-        mQtySum = mSalesList.reduce((acc, s) => acc + s.quantitySold, 0);
+      if (dRM > 0 || dQty > 0 || mRM > 0) {
+        brandLines.push(`${b.name} =${fmt(dRM)}/${fmt(mRM)}⌚${fmt(dQty)}/${fmt(mQty)}`);
+        totalDay += dRM;
+        totalMon += mRM;
       }
-
-      totalDay += dSales;
-      totalMon += mSalesSum;
-
-      brandLines.push(`${b.name} =${fmt(dSales)}/${fmt(mSalesSum)}⌚${fmt(dQty)}/${fmt(mQtySum)}`);
     });
 
-    const lines = [`${todayStr}(MRT)`, `*Sale RM ${fmt(totalDay)}`];
-    lines.push(...brandLines);
-    lines.push(`\nTotal 1-${day} {monthYr}`, `*Rm ${fmt(totalMon)}`);
-    
-    // Fix template variables
-    const finalLines = [
-      `${todayStr}(MRT)`,
+    return [
+      `${dateLabel}(MRT)`,
       `*Sale RM ${fmt(totalDay)}`,
       ...brandLines,
-      `\nTotal 1-${day} ${monthYr}`,
+      `\nTotal 1-${dayNum} ${monthYr}`,
       `*Rm ${fmt(totalMon)}`
-    ];
-
-    return finalLines.join('\n');
-  };
-
-  const currentSummary = useMemo(() => {
-    if (brands.length === 0) return '';
-    return buildSummary(brands, monthlySales, entryDate);
-  }, [brands, monthlySales, entryDate]);
+    ].join('\n');
+  }, [brands, stats, draftSales, entryDate]);
 
   // --- HANDLERS ---
+  const handleInputChange = (brandId: string, field: 'rm' | 'qty', value: string) => {
+    setDraftSales(prev => ({
+      ...prev,
+      [brandId]: {
+        ...prev[brandId],
+        [field]: value
+      }
+    }));
+    setIsDirty(true);
+  };
+
+  const handleGlobalSave = async () => {
+    try {
+      const salesInputs: SalesInput[] = Object.entries(draftSales).map(([brandId, vals]) => ({
+        brandId,
+        salesAmount: parseFloat(vals.rm) || 0,
+        quantitySold: parseInt(vals.qty) || 0
+      }));
+      
+      await stateService.saveDailySales(entryDate, salesInputs);
+      await refreshData(entryDate);
+      showStatus('success', 'Command Center Synced');
+    } catch (err) {
+      showStatus('error', 'Sync Failed');
+    }
+  };
+
   const showStatus = (type: 'success' | 'error', msg: string) => {
     setStatus({ type, msg });
     setTimeout(() => setStatus(null), 3000);
   };
 
-  const goMenu = () => {
-    setView('MAIN_MENU');
-    setEntryIndex(0);
-    setSelectedBrandIds([]);
-    setTempEntries({});
-    setEditIndex(0);
-    setEditBrandIds([]);
-    setEditTemp({});
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(whatsappSummary);
+    showStatus('success', 'Receipt Copied');
   };
 
-  // Sales Start
-  const startSales = () => {
-    if (brands.length === 0) {
-      showStatus('error', 'No brands yet. Add one first.');
-      return;
-    }
-    setView('SALES_DATE_SELECT');
-  };
+  // --- RENDER PARTS ---
 
-  // Date Selection
-  const handleDateSelect = (type: 'today' | 'yesterday' | 'other') => {
-    if (type === 'today') {
-      setEntryDate(getTodayStr());
-      setView('SALES_SELECT');
-    } else if (type === 'yesterday') {
-      const d = new Date();
-      d.setDate(d.getDate() - 1);
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      setEntryDate(`${yyyy}-${mm}-${dd}`);
-      setView('SALES_SELECT');
-    } else {
-      setView('SALES_CUSTOM_DATE');
-    }
-  };
-
-  const handleCustomDate = () => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(customDateInput)) {
-      showStatus('error', 'Use YYYY-MM-DD format');
-      return;
-    }
-    setEntryDate(customDateInput);
-    setView('SALES_SELECT');
-  };
-
-  // Brand Toggle
-  const toggleBrand = (id: string) => {
-    setSelectedBrandIds(prev => 
-      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
-    );
-  };
-
-  const startEntryFlow = (clearFirst: boolean) => {
-    setEntryIndex(0);
-    setTempEntries({});
-    setView('SALES_ENTER_RM');
-  };
-
-  // RM/QTY Input
-  const handleRMInput = (val: string) => {
-    const brandId = selectedBrandIds[entryIndex];
-    setTempEntries(prev => ({ ...prev, [brandId]: { ...prev[brandId], rm: val } }));
-    setView('SALES_ENTER_QTY');
-  };
-
-  const handleQTYInput = (val: string) => {
-    const brandId = selectedBrandIds[entryIndex];
-    setTempEntries(prev => ({ ...prev, [brandId]: { ...prev[brandId], qty: val } }));
-    if (entryIndex < selectedBrandIds.length - 1) {
-      setEntryIndex(prev => prev + 1);
-      setView('SALES_ENTER_RM');
-    } else {
-      setView('SALES_SAVE_CONFIRM');
-    }
-  };
-
-  const saveSales = async () => {
-    setLoading(true);
-    try {
-      const existing = await stateService.getDailySales(entryDate);
-      
-      const salesInputs: SalesInput[] = brands.map(b => {
-        const temp = tempEntries[b.id];
-        const exist = existing.find(e => e.brandId === b.id);
-        
-        if (temp) {
-          // If clearing today first was selected, we'd overwrite. 
-          // For now we add as per bot's common pattern if not cleared.
-          return {
-            brandId: b.id,
-            salesAmount: (exist?.salesAmount || 0) + (parseFloat(temp.rm) || 0),
-            quantitySold: (exist?.quantitySold || 0) + (parseInt(temp.qty) || 0)
-          };
-        }
-        return null;
-      }).filter(Boolean) as SalesInput[];
-
-      if (salesInputs.length > 0) {
-        await stateService.saveDailySales(entryDate, salesInputs);
-        await refreshMonthlyData(entryDate);
-      }
-      showStatus('success', 'Sales saved successfully!');
-      goMenu();
-    } catch (err) {
-      showStatus('error', 'Failed to save sales.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Edit Monthly
-  const toggleEditBrand = (id: string) => {
-    setEditBrandIds(prev => 
-      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
-    );
-  };
-
-  const startEditFlow = () => {
-    setEditIndex(0);
-    const initialTemp: Record<string, { rm: string, qty: string }> = {};
-    editBrandIds.forEach(id => {
-      const mSalesList = monthlySales.filter(s => s.brandId === id);
-      const latestOverride = [...mSalesList].sort((a,b) => b.date.localeCompare(a.date)).find(s => s.mtdSalesAmount !== undefined);
-      
-      let mSalesSum = 0;
-      let mQtySum = 0;
-
-      if (latestOverride) {
-        mSalesSum = latestOverride.mtdSalesAmount || 0;
-        mQtySum = latestOverride.mtdQuantitySold || 0;
-      } else {
-        mSalesSum = mSalesList.reduce((acc, s) => acc + s.salesAmount, 0);
-        mQtySum = mSalesList.reduce((acc, s) => acc + s.quantitySold, 0);
-      }
-
-      initialTemp[id] = { rm: mSalesSum.toString(), qty: mQtySum.toString() };
-    });
-    setEditTemp(initialTemp);
-    setView('EDIT_MONTHLY_RM');
-  };
-
-  const handleEditRM = (val: string) => {
-    const brandId = editBrandIds[editIndex];
-    setEditTemp(prev => ({ ...prev, [brandId]: { ...prev[brandId], rm: val } }));
-    setView('EDIT_MONTHLY_QTY');
-  };
-
-  const handleEditQTY = (val: string) => {
-    const brandId = editBrandIds[editIndex];
-    setEditTemp(prev => ({ ...prev, [brandId]: { ...prev[brandId], qty: val } }));
-    if (editIndex < editBrandIds.length - 1) {
-      setEditIndex(prev => prev + 1);
-      setView('EDIT_MONTHLY_RM');
-    } else {
-      saveMonthlyEdits();
-    }
-  };
-
-  const saveMonthlyEdits = async () => {
-    setLoading(true);
-    try {
-      const salesInputs: SalesInput[] = editBrandIds.map(id => {
-        const temp = editTemp[id];
-        return {
-          brandId: id,
-          salesAmount: 0, 
-          quantitySold: 0,
-          mtdSalesAmount: parseFloat(temp.rm),
-          mtdQuantitySold: parseInt(temp.qty)
-        };
-      });
-
-      await stateService.saveDailySales(entryDate, salesInputs);
-      await refreshMonthlyData(entryDate);
-      showStatus('success', 'Monthly totals updated!');
-      goMenu();
-    } catch (err) {
-      showStatus('error', 'Failed to update monthly totals.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Brand Management
-  const addBrand = async () => {
-    if (!newBrandName.trim()) return;
-    setLoading(true);
-    try {
-      await stateService.saveBrand(newBrandName, brands.length + 1);
-      const b = await stateService.getBrands();
-      setBrands(b);
-      setNewBrandName('');
-      showStatus('success', `Brand ${newBrandName} added!`);
-      goMenu();
-    } catch (err) {
-      showStatus('error', 'Failed to add brand.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const removeBrand = async (id: string) => {
-    setLoading(true);
-    try {
-      await stateService.deleteBrand(id);
-      const b = await stateService.getBrands();
-      setBrands(b);
-      showStatus('success', 'Brand removed.');
-      goMenu();
-    } catch (err) {
-      showStatus('error', 'Failed to remove brand.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleRearrange = async (order: string) => {
-    const indices = order.split(',').map(s => parseInt(s.trim()) - 1);
-    if (indices.length !== brands.length || indices.some(i => isNaN(i) || i < 0 || i >= brands.length)) {
-      showStatus('error', 'Invalid order.');
-      return;
-    }
-    const newOrder = indices.map((idx, i) => ({ ...brands[idx], sortOrder: i + 1 }));
-    setLoading(true);
-    try {
-      await stateService.saveBrandsOrder(newOrder);
-      setBrands(newOrder);
-      showStatus('success', 'Order updated!');
-      goMenu();
-    } catch (err) {
-      showStatus('error', 'Failed to update order.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const clearTodayAll = async () => {
-    setLoading(true);
-    try {
-      const salesInputs: SalesInput[] = brands.map(b => ({
-        brandId: b.id,
-        salesAmount: 0,
-        quantitySold: 0
-      }));
-      await stateService.saveDailySales(entryDate, salesInputs);
-      await refreshMonthlyData(entryDate);
-      showStatus('success', 'Today cleared for all brands.');
-      goMenu();
-    } catch (err) {
-      showStatus('error', 'Failed to clear.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const resetMonthly = async () => {
-    setLoading(true);
-    try {
-      await stateService.resetMonthlySales(entryDate.substring(0, 7));
-      await refreshMonthlyData(entryDate);
-      showStatus('success', 'Monthly data reset.');
-      goMenu();
-    } catch (err) {
-      showStatus('error', 'Failed to reset.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // --- VIEWS ---
-
-  const renderHeader = (title: string, onBack?: () => void) => (
-    <div className="flex items-center gap-4 mb-6">
-      {onBack && (
-        <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-          <ChevronLeft className="w-6 h-6 text-slate-600" />
-        </button>
-      )}
-      <h1 className="text-xl font-bold text-slate-800">{title}</h1>
-    </div>
-  );
-
-  const renderMainMenu = () => (
-    <div className="flex flex-col gap-3">
-      <h1 className="text-2xl font-bold text-slate-900 mb-4 flex items-center gap-2">
-        <TrendingUp className="w-8 h-8 text-indigo-600" />
-        Watch Sales Tracker
-      </h1>
-      
-      <button onClick={startSales} className="w-full p-4 bg-indigo-600 text-white rounded-2xl font-bold flex items-center gap-3 shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all">
-        <Calendar className="w-6 h-6" />
-        📊 Enter Today's Sales
-      </button>
-
-      <button onClick={() => setView('PREVIEW_SUMMARY')} className="w-full p-4 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold flex items-center gap-3 hover:bg-slate-50 transition-all">
-        <Eye className="w-6 h-6 text-indigo-500" />
-        👁 Preview Summary
-      </button>
-
-      <button onClick={() => setView('EDIT_MONTHLY_SELECT')} className="w-full p-4 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold flex items-center gap-3 hover:bg-slate-50 transition-all">
-        <Plus className="w-6 h-6 text-emerald-500" />
-        📝 Edit Monthly Totals
-      </button>
-
-      <div className="grid grid-cols-2 gap-3">
-        <button onClick={() => setView('ADD_BRAND')} className="p-4 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold flex items-center gap-2 hover:bg-slate-50 transition-all">
-          <Plus className="w-5 h-5 text-indigo-500" />
-          Add Brand
-        </button>
-        <button onClick={() => setView('REMOVE_BRAND')} className="p-4 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold flex items-center gap-2 hover:bg-slate-50 transition-all">
-          <Minus className="w-5 h-5 text-rose-500" />
-          Remove
-        </button>
-      </div>
-
-      <button onClick={() => setView('VIEW_BRANDS')} className="w-full p-4 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold flex items-center gap-3 hover:bg-slate-50 transition-all">
-        <List className="w-6 h-6 text-amber-500" />
-        📋 View Brands
-      </button>
-
-      <button onClick={() => setView('REARRANGE')} className="w-full p-4 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold flex items-center gap-3 hover:bg-slate-50 transition-all">
-        <Move className="w-6 h-6 text-blue-500" />
-        🔀 Rearrange
-      </button>
-
-      <button onClick={() => setView('CLEAR_ALL_CONFIRM')} className="w-full p-4 bg-white border border-slate-200 text-rose-600 rounded-2xl font-bold flex items-center gap-3 hover:bg-rose-50 transition-all">
-        <Trash2 className="w-6 h-6" />
-        🗑 Clear Today (All)
-      </button>
-
-      <div className="grid grid-cols-2 gap-3">
-        <button onClick={() => setView('RESET_MONTHLY_CONFIRM')} className="p-4 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold flex items-center gap-2 hover:bg-slate-50 transition-all">
-          <RotateCcw className="w-5 h-5 text-orange-500" />
-          Reset Monthly
-        </button>
-        <button onClick={() => setView('RESTORE_BACKUP_CONFIRM')} className="p-4 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold flex items-center gap-2 hover:bg-slate-50 transition-all">
-          <History className="w-5 h-5 text-slate-500" />
-          Restore
-        </button>
-      </div>
-    </div>
-  );
-
-  const renderSalesDateSelect = () => (
-    <div className="flex flex-col gap-4">
-      {renderHeader("Which date?", goMenu)}
-      <button onClick={() => handleDateSelect('today')} className="w-full p-6 bg-white border border-slate-200 rounded-2xl font-bold text-lg text-slate-700 shadow-sm hover:border-indigo-500 transition-all flex items-center justify-between">
-        📅 Today ({formatDate(new Date())})
-        <ChevronRight className="text-slate-400" />
-      </button>
-      <button onClick={() => handleDateSelect('yesterday')} className="w-full p-6 bg-white border border-slate-200 rounded-2xl font-bold text-lg text-slate-700 shadow-sm hover:border-indigo-500 transition-all flex items-center justify-between">
-        📅 Yesterday ({formatDate(new Date(Date.now() - 86400000))})
-        <ChevronRight className="text-slate-400" />
-      </button>
-      <button onClick={() => handleDateSelect('other')} className="w-full p-6 bg-white border border-slate-200 rounded-2xl font-bold text-lg text-slate-700 shadow-sm hover:border-indigo-500 transition-all flex items-center justify-between">
-        📅 Other date
-        <ChevronRight className="text-slate-400" />
-      </button>
-    </div>
-  );
-
-  const renderSalesCustomDate = () => (
-    <div className="flex flex-col gap-4">
-      {renderHeader("Enter Date", () => setView('SALES_DATE_SELECT'))}
-      <p className="text-slate-500 mb-2">Format: YYYY-MM-DD (e.g., 2024-04-11)</p>
-      <input 
-        type="text" 
-        value={customDateInput}
-        onChange={e => setCustomDateInput(e.target.value)}
-        placeholder="YYYY-MM-DD"
-        className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-lg outline-none focus:ring-2 focus:ring-indigo-500"
-      />
-      <button onClick={handleCustomDate} className="w-full p-4 bg-indigo-600 text-white rounded-2xl font-bold text-lg">
-        Next
-      </button>
-    </div>
-  );
-
-  const renderSalesSelect = () => (
-    <div className="flex flex-col gap-4">
-      {renderHeader("Tap brands sold", () => setView('SALES_DATE_SELECT'))}
-      <div className="grid grid-cols-2 gap-2 overflow-y-auto max-h-[50vh] p-1">
-        {brands.map(b => (
-          <button 
-            key={b.id}
-            onClick={() => toggleBrand(b.id)}
-            className={`p-4 rounded-xl font-bold text-sm transition-all border ${
-              selectedBrandIds.includes(b.id) 
-                ? 'bg-indigo-600 border-indigo-600 text-white shadow-md' 
-                : 'bg-white border-slate-200 text-slate-700'
-            }`}
-          >
-            {selectedBrandIds.includes(b.id) && "✅ "}{b.name}
-          </button>
-        ))}
-      </div>
-      <div className="flex gap-3 mt-4">
-        <button onClick={goMenu} className="flex-1 p-4 bg-slate-100 text-slate-700 rounded-2xl font-bold">Cancel</button>
-        <button 
-          onClick={() => setView('SALES_CLEAR_CONFIRM')}
-          disabled={selectedBrandIds.length === 0}
-          className="flex-1 p-4 bg-indigo-600 text-white rounded-2xl font-bold disabled:opacity-50"
-        >
-          Done
-        </button>
-      </div>
-    </div>
-  );
-
-  const renderSalesClearConfirm = () => (
-    <div className="flex flex-col gap-6 text-center">
-      {renderHeader("Clear entries?", () => setView('SALES_SELECT'))}
-      <p className="text-lg text-slate-700">Clear today's entries for selected brands first?</p>
-      <div className="flex flex-col gap-3">
-        <button onClick={() => startEntryFlow(true)} className="w-full p-4 bg-rose-600 text-white rounded-2xl font-bold">
-          Yes, clear first
-        </button>
-        <button onClick={() => startEntryFlow(false)} className="w-full p-4 bg-indigo-600 text-white rounded-2xl font-bold">
-          No, keep existing
-        </button>
-      </div>
-    </div>
-  );
-
-  const renderSalesEntry = (isRM: boolean) => {
-    const brandId = selectedBrandIds[entryIndex];
-    const brand = brands.find(b => b.id === brandId);
-    
-    const handleNext = (e: React.FormEvent) => {
-      e.preventDefault();
-      const val = (e.currentTarget.querySelector('input') as HTMLInputElement).value;
-      if (isRM) handleRMInput(val);
-      else handleQTYInput(val);
-    };
-
-    return (
-      <div className="flex flex-col gap-4">
-        {renderHeader(`${brand?.name} (${entryIndex + 1}/${selectedBrandIds.length})`, goMenu)}
-        <h2 className="text-xl font-bold text-slate-800">{isRM ? "Enter RM amount:" : "Enter quantity:"}</h2>
-        <form onSubmit={handleNext} className="flex flex-col gap-4">
-          <input 
-            type="number"
-            inputMode="decimal"
-            defaultValue={isRM ? tempEntries[brandId]?.rm : tempEntries[brandId]?.qty}
-            autoFocus
-            className="w-full p-6 text-4xl font-bold bg-white border border-slate-200 rounded-3xl text-center outline-none focus:ring-4 focus:ring-indigo-100"
-          />
-          <button 
-            type="submit"
-            className="w-full p-5 bg-indigo-600 text-white rounded-2xl font-bold text-xl"
-          >
-            Next
-          </button>
-        </form>
-      </div>
-    );
-  };
-
-  const renderSaveConfirm = () => (
-    <div className="flex flex-col gap-4">
-      {renderHeader("Preview Changes", goMenu)}
-      <div className="bg-slate-900 p-4 rounded-2xl text-emerald-400 font-mono text-sm whitespace-pre-wrap leading-relaxed shadow-xl overflow-y-auto max-h-[40vh]">
-        {selectedBrandIds.map(id => {
-          const b = brands.find(brand => brand.id === id);
-          return `${b?.name}: RM ${tempEntries[id]?.rm} (${tempEntries[id]?.qty}⌚)\n`;
-        })}
-      </div>
-      <div className="flex gap-3 mt-4">
-        <button onClick={goMenu} className="flex-1 p-4 bg-slate-100 text-slate-700 rounded-2xl font-bold">Discard</button>
-        <button onClick={saveSales} className="flex-1 p-4 bg-indigo-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2">
-          <Save className="w-5 h-5" />
-          Save Changes
-        </button>
-      </div>
-    </div>
-  );
-
-  const renderPreviewSummary = () => {
-    const copyToClipboard = () => {
-      navigator.clipboard.writeText(currentSummary);
-      showStatus('success', 'Copied to clipboard!');
-    };
-
-    return (
-      <div className="flex flex-col gap-4">
-        {renderHeader("WhatsApp Summary", goMenu)}
-        <div className="bg-[#dcf8c6] p-4 rounded-2xl text-slate-800 font-sans text-sm whitespace-pre-wrap leading-relaxed shadow-md border border-[#c0e0a8] overflow-y-auto max-h-[50vh]">
-          {currentSummary}
+  const renderCommandCenter = () => (
+    <div className="flex flex-col lg:flex-row gap-6 h-full min-h-[calc(100vh-12rem)]">
+      {/* LEFT COLUMN: Input Grid */}
+      <div className="flex-1 flex flex-col gap-6">
+        {/* Header Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <StatCard title="Revenue" value={fmt(stats.todayRM)} icon={TrendingUp} colorClass="bg-emerald-500" suffix="RM" />
+          <StatCard title="Units" value={stats.todayQty} icon={Package} colorClass="bg-indigo-500" suffix="PCS" />
+          <StatCard title="MTD Total" value={fmt(stats.monthlyRM)} icon={Database} colorClass="bg-amber-500" suffix="RM" className="hidden md:flex" />
         </div>
-        <p className="text-xs text-slate-500 text-center">(Long-press above or click below to copy)</p>
-        <button onClick={copyToClipboard} className="w-full p-4 bg-white border border-slate-200 text-indigo-600 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-slate-50">
-          <Copy className="w-5 h-5" />
-          Copy for WhatsApp
-        </button>
-        <button onClick={goMenu} className="w-full p-4 bg-indigo-600 text-white rounded-2xl font-bold">
-          ◀️ Main Menu
-        </button>
-      </div>
-    );
-  };
 
-  const renderEditMonthlySelect = () => (
-    <div className="flex flex-col gap-4">
-      {renderHeader("Select brands to edit", goMenu)}
-      <div className="grid grid-cols-2 gap-2 overflow-y-auto max-h-[50vh] p-1">
-        {brands.map(b => (
-          <button 
-            key={b.id}
-            onClick={() => toggleEditBrand(b.id)}
-            className={`p-4 rounded-xl font-bold text-sm transition-all border ${
-              editBrandIds.includes(b.id) 
-                ? 'bg-emerald-600 border-emerald-600 text-white shadow-md' 
-                : 'bg-white border-slate-200 text-slate-700'
-            }`}
-          >
-            {editBrandIds.includes(b.id) && "✅ "}{b.name}
-          </button>
-        ))}
-      </div>
-      <div className="flex gap-3 mt-4">
-        <button onClick={() => editBrandIds.length === brands.length ? setEditBrandIds([]) : setEditBrandIds(brands.map(b => b.id))} className="flex-1 p-4 bg-slate-100 text-slate-700 rounded-2xl font-bold">
-          {editBrandIds.length === brands.length ? "Untick All" : "☑️ All"}
-        </button>
-        <button 
-          onClick={startEditFlow}
-          disabled={editBrandIds.length === 0}
-          className="flex-1 p-4 bg-emerald-600 text-white rounded-2xl font-bold disabled:opacity-50"
-        >
-          ✅ Done
-        </button>
-      </div>
-    </div>
-  );
-
-  const renderEditEntry = (isRM: boolean) => {
-    const brandId = editBrandIds[editIndex];
-    const brand = brands.find(b => b.id === brandId);
-    
-    const handleNext = (e: React.FormEvent) => {
-      e.preventDefault();
-      const val = (e.currentTarget.querySelector('input') as HTMLInputElement).value;
-      if (isRM) handleEditRM(val);
-      else handleEditQTY(val);
-    };
-
-    return (
-      <div className="flex flex-col gap-4">
-        {renderHeader(`${brand?.name} (${editIndex + 1}/${editBrandIds.length})`, goMenu)}
-        <h2 className="text-xl font-bold text-slate-800">
-          {isRM ? `Monthly Sales (current: RM ${fmt(editTemp[brandId]?.rm)})` : `Monthly Qty (current: ${editTemp[brandId]?.qty})`}
-        </h2>
-        <form onSubmit={handleNext} className="flex flex-col gap-4">
-          <input 
-            type="number"
-            inputMode="decimal"
-            defaultValue={isRM ? editTemp[brandId]?.rm : editTemp[brandId]?.qty}
-            autoFocus
-            className="w-full p-6 text-4xl font-bold bg-white border border-slate-200 rounded-3xl text-center outline-none focus:ring-4 focus:ring-emerald-100"
-          />
-          <div className="flex gap-3">
-            <button 
-              type="button"
-              onClick={() => isRM ? setView('EDIT_MONTHLY_QTY') : (editIndex < editBrandIds.length - 1 ? (setEditIndex(i => i + 1), setView('EDIT_MONTHLY_RM')) : saveMonthlyEdits())} 
-              className="flex-1 p-4 bg-slate-100 text-slate-700 rounded-2xl font-bold"
-            >
-              ⏭ Skip
-            </button>
-            <button 
-              type="submit"
-              className="flex-2 p-4 bg-emerald-600 text-white rounded-2xl font-bold"
-            >
-              Next
-            </button>
+        {/* The Grid */}
+        <GlassCard className="flex-1 flex flex-col shadow-2xl border-white/5">
+          <div className="p-4 border-b border-white/5 flex flex-col sm:flex-row gap-4 items-center justify-between bg-white/[0.02]">
+             <div className="flex items-center gap-2 bg-[#020617] p-2 px-4 rounded-2xl border border-white/10 group focus-within:border-indigo-500/50 transition-all">
+                <Calendar className="w-4 h-4 text-indigo-400" />
+                <input 
+                  type="date" 
+                  value={entryDate} 
+                  onChange={e => setEntryDate(e.target.value)}
+                  className="bg-transparent text-white outline-none text-xs font-mono uppercase font-bold"
+                />
+              </div>
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <input 
+                  type="text"
+                  placeholder="Quick find brand..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 bg-[#020617] border border-white/10 rounded-2xl text-white text-xs outline-none focus:border-indigo-500/50 transition-all"
+                />
+              </div>
           </div>
-        </form>
-      </div>
-    );
-  };
 
-  const renderAddBrand = () => (
-    <div className="flex flex-col gap-4">
-      {renderHeader("Add Brand", goMenu)}
-      <input 
-        type="text" 
-        value={newBrandName}
-        onChange={e => setNewBrandName(e.target.value)}
-        placeholder="Brand name"
-        className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-lg outline-none focus:ring-2 focus:ring-indigo-500"
-      />
-      <button onClick={addBrand} className="w-full p-4 bg-indigo-600 text-white rounded-2xl font-bold text-lg">
-        Add Brand
-      </button>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-white/[0.01] border-b border-white/5">
+                  <th className="p-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Brand</th>
+                  <th className="p-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">RM Sale</th>
+                  <th className="p-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">Quantity</th>
+                  <th className="p-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/[0.03]">
+                {filteredBrands.map(brand => {
+                  const hasData = (parseFloat(draftSales[brand.id]?.rm) || 0) > 0 || (parseInt(draftSales[brand.id]?.qty) || 0) > 0;
+                  return (
+                    <motion.tr 
+                      key={brand.id}
+                      layout
+                      className="group hover:bg-white/[0.02] transition-colors"
+                    >
+                      <td className="p-4">
+                        <div className="flex flex-col">
+                          <span className={`text-sm font-bold transition-colors ${hasData ? 'text-emerald-400' : 'text-slate-300'}`}>
+                            {brand.name}
+                          </span>
+                          <span className="text-[10px] text-slate-600 font-mono">MTD: {fmt(stats.brandStats[brand.id]?.mtdRM || 0)}</span>
+                        </div>
+                      </td>
+                      <td className="p-2">
+                        <input 
+                          type="number"
+                          inputMode="decimal"
+                          value={draftSales[brand.id]?.rm || ''}
+                          onChange={e => handleInputChange(brand.id, 'rm', e.target.value)}
+                          placeholder="0.00"
+                          className="w-full bg-[#020617]/50 border border-white/5 rounded-xl p-2.5 text-center text-white font-mono text-sm focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 outline-none transition-all"
+                        />
+                      </td>
+                      <td className="p-2">
+                         <input 
+                          type="number"
+                          inputMode="numeric"
+                          value={draftSales[brand.id]?.qty || ''}
+                          onChange={e => handleInputChange(brand.id, 'qty', e.target.value)}
+                          placeholder="0"
+                          className="w-full bg-[#020617]/50 border border-white/5 rounded-xl p-2.5 text-center text-white font-mono text-sm focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 outline-none transition-all"
+                        />
+                      </td>
+                      <td className="p-4 text-right">
+                        {hasData ? (
+                           <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                            <Check className="w-3 h-3" />
+                           </motion.div>
+                        ) : (
+                          <div className="w-6 h-6 rounded-full border border-white/5 mx-auto opacity-20" />
+                        )}
+                      </td>
+                    </motion.tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {filteredBrands.length === 0 && (
+              <div className="p-12 text-center text-slate-600 italic text-sm">No brands found for "{searchQuery}"</div>
+            )}
+          </div>
+        </GlassCard>
+      </div>
+
+      {/* RIGHT COLUMN: Persistent Live Receipt (Desktop only) */}
+      <div className="hidden lg:flex w-80 flex-col gap-6 sticky top-8 h-fit">
+        <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-400 flex items-center gap-2 px-2">
+          <Share2 className="w-3 h-3" /> Live WhatsApp Feed
+        </h2>
+        
+        <div className="relative">
+          {/* WhatsApp Bubble Design */}
+          <div className="bg-[#0b141a] rounded-[2rem] rounded-tr-none p-5 border border-white/5 shadow-2xl relative">
+            {/* Typing Indicator if dirty */}
+            <AnimatePresence>
+              {isDirty && (
+                <motion.div 
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  className="absolute -top-3 left-6 px-2 py-0.5 bg-emerald-500 text-[8px] font-black text-black rounded-full"
+                >
+                  UPDATING...
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <div className="text-emerald-500 font-mono text-xs whitespace-pre-wrap leading-relaxed select-all">
+              {whatsappSummary}
+            </div>
+            
+            <div className="mt-4 flex justify-end items-center gap-1 text-[9px] text-slate-600 font-bold uppercase tracking-widest">
+              <span>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              <Check className="w-3 h-3 text-emerald-500" />
+            </div>
+          </div>
+          {/* Bubble Tail */}
+          <div className="absolute top-0 -right-2 w-4 h-4 bg-[#0b141a] clip-path-polygon-[0_0,100%_0,0_100%]" style={{ clipPath: 'polygon(0 0, 100% 0, 0 100%)' }} />
+        </div>
+
+        <div className="grid grid-cols-1 gap-3">
+          <button 
+            onClick={copyToClipboard}
+            className="w-full py-4 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 rounded-2xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 transition-all"
+          >
+            <Copy className="w-4 h-4" /> Copy for WhatsApp
+          </button>
+          <button 
+            onClick={() => {
+              const url = `whatsapp://send?text=${encodeURIComponent(whatsappSummary)}`;
+              window.open(url, '_blank');
+            }}
+            className="w-full py-4 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 transition-all"
+          >
+            <ArrowUpRight className="w-4 h-4" /> Forward to Chat
+          </button>
+        </div>
+      </div>
     </div>
   );
 
-  const renderRemoveBrand = () => (
-    <div className="flex flex-col gap-2 overflow-y-auto max-h-[60vh] p-1">
-      {renderHeader("Remove Brand", goMenu)}
-      {brands.map(b => (
+  const renderAdmin = () => (
+    <div className="flex flex-col gap-6 max-w-2xl mx-auto">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-black text-white flex items-center gap-3">
+          <div className="p-2 bg-indigo-500/20 rounded-xl"><Settings className="w-5 h-5 text-indigo-400" /></div>
+          System Control
+        </h2>
         <button 
-          key={b.id}
-          onClick={() => removeBrand(b.id)}
-          className="w-full p-4 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold flex items-center justify-between hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-all"
+          onClick={async () => {
+            const name = prompt("Enter brand name:");
+            if (name) {
+              await stateService.saveBrand(name, brands.length + 1);
+              setBrands(await stateService.getBrands());
+              showStatus('success', 'Asset Added');
+            }
+          }}
+          className="flex items-center gap-2 px-4 py-2 bg-indigo-500 text-white rounded-xl font-bold text-sm hover:bg-indigo-600 transition-colors shadow-lg shadow-indigo-500/20"
         >
-          {b.name}
-          <Trash2 className="w-5 h-5 opacity-50" />
-        </button>
-      ))}
-    </div>
-  );
-
-  const renderViewBrands = () => (
-    <div className="flex flex-col gap-2 overflow-y-auto max-h-[60vh] p-1">
-      {renderHeader("Brand List", goMenu)}
-      {brands.map((b, i) => (
-        <div key={b.id} className="w-full p-4 bg-white border border-slate-100 text-slate-700 rounded-xl font-bold flex items-center gap-3">
-          <span className="text-slate-400 font-mono text-sm">{i + 1}.</span>
-          {b.name}
-        </div>
-      ))}
-      <button onClick={goMenu} className="mt-4 w-full p-4 bg-indigo-600 text-white rounded-2xl font-bold">
-        ◀️ Main Menu
-      </button>
-    </div>
-  );
-
-  const renderRearrange = () => {
-    const [orderInput, setOrderInput] = useState('');
-    return (
-      <div className="flex flex-col gap-4">
-        {renderHeader("Rearrange Brands", goMenu)}
-        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-sm text-slate-600 overflow-y-auto max-h-[30vh]">
-          <p className="font-bold mb-2">Current order:</p>
-          {brands.map((b, i) => (
-            <div key={b.id}>{i + 1}. {b.name}</div>
-          ))}
-        </div>
-        <p className="text-sm text-slate-500 mt-2">Enter new order (comma-separated):</p>
-        <input 
-          type="text" 
-          value={orderInput}
-          onChange={e => setOrderInput(e.target.value)}
-          placeholder="e.g., 2,1,3,4"
-          className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-lg outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-        <button onClick={() => handleRearrange(orderInput)} className="w-full p-4 bg-indigo-600 text-white rounded-2xl font-bold">
-          Update Order
+          <Plus className="w-4 h-4" /> New Brand
         </button>
       </div>
-    );
-  };
 
-  const renderConfirm = (title: string, desc: string, onConfirm: () => void) => (
-    <div className="flex flex-col gap-6 text-center">
-      {renderHeader(title, goMenu)}
-      <div className="p-6 bg-orange-50 rounded-3xl border border-orange-100">
-        <AlertCircle className="w-12 h-12 text-orange-500 mx-auto mb-4" />
-        <p className="text-lg text-slate-700 font-medium">{desc}</p>
-      </div>
-      <div className="flex flex-col gap-3">
-        <button onClick={onConfirm} className="w-full p-4 bg-indigo-600 text-white rounded-2xl font-bold text-lg">
-          ✅ Yes, proceed
-        </button>
-        <button onClick={goMenu} className="w-full p-4 bg-slate-100 text-slate-700 rounded-2xl font-bold text-lg">
-          ❌ No, cancel
-        </button>
+      <div className="grid grid-cols-1 gap-4">
+        <GlassCard className="p-6">
+          <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-4 flex items-center gap-2">
+            <List className="w-3 h-3" /> Active Portfolio
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {brands.map((b, i) => (
+              <div key={b.id} className="p-3 bg-white/[0.02] border border-white/5 rounded-xl flex items-center justify-between group">
+                <span className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                  <span className="text-[8px] font-mono text-slate-600">{i+1}</span>
+                  {b.name}
+                </span>
+                <button 
+                  onClick={async () => {
+                    if (confirm(`Remove ${b.name}?`)) {
+                      await stateService.deleteBrand(b.id);
+                      setBrands(await stateService.getBrands());
+                      showStatus('success', 'Asset Removed');
+                    }
+                  }}
+                  className="p-2 text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-500/10 rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </GlassCard>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <GlassCard 
+            className="p-5 cursor-pointer group hover:bg-white/[0.04] transition-all"
+            onClick={async () => {
+              if (confirm("Reset ALL data for this month?")) {
+                await stateService.resetMonthlySales(entryDate.substring(0, 7));
+                await refreshData(entryDate);
+                showStatus('success', 'Cycle Reset');
+              }
+            }}
+          >
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-2xl bg-rose-500/10 text-rose-500 group-hover:rotate-180 transition-transform duration-500">
+                <RotateCcw className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="text-white font-black text-sm uppercase tracking-tighter">Hard Reset</div>
+                <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Wipe {getMonthYear(entryDate)}</div>
+              </div>
+            </div>
+          </GlassCard>
+
+          <GlassCard 
+            className="p-5 flex items-center gap-4"
+          >
+            <div className="p-3 rounded-2xl bg-emerald-500/10 text-emerald-500">
+              <History className="w-6 h-6" />
+            </div>
+            <div className="flex-1">
+              <div className="text-white font-black text-sm uppercase tracking-tighter">Sync Status</div>
+              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
+                {isSyncing ? 'Synchronizing...' : 'Live & Encrypted'}
+              </div>
+            </div>
+            <div className={`w-2 h-2 rounded-full ${isSyncing ? 'bg-indigo-500 animate-ping' : 'bg-emerald-500'}`} />
+          </GlassCard>
+        </div>
       </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans p-4 sm:p-6 antialiased">
-      <div className="max-w-md mx-auto">
-        
-        {/* Status Toast */}
-        {status && (
-          <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 p-4 rounded-2xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-4 ${
-            status.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
-          }`}>
-            {status.type === 'success' ? <Check className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
-            <span className="font-bold">{status.msg}</span>
-          </div>
-        )}
-
-        {/* Loading Overlay */}
-        {loading && (
-          <div className="fixed inset-0 bg-white/60 backdrop-blur-sm z-40 flex items-center justify-center">
-            <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-          </div>
-        )}
-
-        <div className="bg-white rounded-[2rem] p-6 shadow-xl shadow-slate-200/50 border border-slate-100 min-h-[80vh] flex flex-col">
-          {view === 'MAIN_MENU' && renderMainMenu()}
-          {view === 'SALES_DATE_SELECT' && renderSalesDateSelect()}
-          {view === 'SALES_CUSTOM_DATE' && renderSalesCustomDate()}
-          {view === 'SALES_SELECT' && renderSalesSelect()}
-          {view === 'SALES_CLEAR_CONFIRM' && renderSalesClearConfirm()}
-          {view === 'SALES_ENTER_RM' && renderSalesEntry(true)}
-          {view === 'SALES_ENTER_QTY' && renderSalesEntry(false)}
-          {view === 'SALES_SAVE_CONFIRM' && renderSaveConfirm()}
-          {view === 'PREVIEW_SUMMARY' && renderPreviewSummary()}
-          {view === 'EDIT_MONTHLY_SELECT' && renderEditMonthlySelect()}
-          {view === 'EDIT_MONTHLY_RM' && renderEditEntry(true)}
-          {view === 'EDIT_MONTHLY_QTY' && renderEditEntry(false)}
-          {view === 'ADD_BRAND' && renderAddBrand()}
-          {view === 'REMOVE_BRAND' && renderRemoveBrand()}
-          {view === 'VIEW_BRANDS' && renderViewBrands()}
-          {view === 'REARRANGE' && renderRearrange()}
-          {view === 'CLEAR_ALL_CONFIRM' && renderConfirm("Clear Today?", "Reset today's sales & qty to 0 for ALL brands?", clearTodayAll)}
-          {view === 'RESET_MONTHLY_CONFIRM' && renderConfirm("Reset Monthly?", "This resets ALL monthly data to 0. Are you sure?", resetMonthly)}
-          {view === 'RESTORE_BACKUP_CONFIRM' && renderConfirm("Restore Backup?", "This will overwrite current data with the last backup.", () => {
-             showStatus('success', 'Restored from backup!');
-             goMenu();
-          })}
-        </div>
+    <div className="min-h-screen bg-[#020617] text-slate-200 font-sans selection:bg-indigo-500/30 overflow-x-hidden">
+      {/* Dynamic Background */}
+      <div className="fixed inset-0 z-0 pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-900/10 blur-[150px] rounded-full" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] bg-emerald-900/5 blur-[150px] rounded-full" />
+        <div className="absolute top-[30%] right-[10%] w-[30%] h-[30%] bg-blue-900/10 blur-[120px] rounded-full" />
       </div>
+
+      <div className="relative z-10 max-w-[1400px] mx-auto px-4 md:px-8 pt-6 pb-32">
+        {/* TOP NAV BAR */}
+        <header className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-4">
+            <div className="relative">
+              <div className="absolute inset-0 bg-indigo-500 blur-lg opacity-40 animate-pulse" />
+              <div className="relative w-12 h-12 bg-[#020617] border-2 border-indigo-500 rounded-2xl flex items-center justify-center">
+                <CloudZap className="w-7 h-7 text-indigo-500" />
+              </div>
+            </div>
+            <div className="hidden sm:block">
+              <h1 className="text-xl font-black text-white tracking-[0.1em] uppercase">RETAIL PRO</h1>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black text-indigo-400 tracking-widest uppercase">COMMAND CENTER</span>
+                <span className="text-[10px] text-slate-600 font-mono">v4.0.1-STABLE</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+             <AnimatePresence>
+              {isDirty && (
+                <motion.button 
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  onClick={handleGlobalSave}
+                  className="px-6 py-2.5 bg-indigo-500 text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-2xl shadow-indigo-500/40 hover:bg-indigo-600 transition-all flex items-center gap-2 group"
+                >
+                  <Save className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                  Sync Changes
+                </motion.button>
+              )}
+            </AnimatePresence>
+            
+            <div className="flex bg-white/5 border border-white/10 p-1 rounded-2xl">
+              <button 
+                onClick={() => setActiveTab('dashboard')}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'dashboard' ? 'bg-indigo-500 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                Ops
+              </button>
+              <button 
+                onClick={() => setActiveTab('admin')}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'admin' ? 'bg-indigo-500 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                Sys
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* MAIN VIEW */}
+        <main className="relative">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+            >
+              {activeTab === 'dashboard' ? renderCommandCenter() : renderAdmin()}
+            </motion.div>
+          </AnimatePresence>
+        </main>
+
+        {/* MOBILE RECEIPT TOGGLE */}
+        <div className="lg:hidden fixed bottom-6 right-6 z-40">
+           <motion.button 
+            whileTap={{ scale: 0.9 }}
+            onClick={() => setShowMobileReceipt(true)}
+            className="w-14 h-14 bg-emerald-500 text-[#020617] rounded-full flex items-center justify-center shadow-2xl shadow-emerald-500/40 border-4 border-[#020617]"
+          >
+            <Share2 className="w-6 h-6" />
+          </motion.button>
+        </div>
+
+        {/* MOBILE RECEIPT SHEET */}
+        <AnimatePresence>
+          {showMobileReceipt && (
+            <>
+              <motion.div 
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                onClick={() => setShowMobileReceipt(false)}
+                className="fixed inset-0 bg-black/80 backdrop-blur-md z-[50]"
+              />
+              <motion.div 
+                initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
+                className="fixed bottom-0 left-0 right-0 bg-[#0b141a] border-t border-white/10 rounded-t-[3rem] p-8 z-[60] shadow-2xl max-h-[90vh] overflow-y-auto"
+              >
+                <div className="w-12 h-1 bg-white/20 rounded-full mx-auto mb-8" />
+                <div className="flex items-center justify-between mb-8">
+                  <h3 className="text-xl font-black text-white flex items-center gap-3 tracking-tighter">
+                    <div className="p-2 bg-emerald-500/20 rounded-xl"><Share2 className="w-5 h-5 text-emerald-500" /></div>
+                    WHATSAPP RECEIPT
+                  </h3>
+                  <button onClick={() => setShowMobileReceipt(false)} className="p-2 bg-white/5 rounded-full">
+                    <X className="w-6 h-6 text-slate-500" />
+                  </button>
+                </div>
+                
+                <div className="bg-[#020617] p-6 rounded-[2rem] border border-white/10 text-emerald-500 font-mono text-xs whitespace-pre-wrap leading-relaxed mb-8 shadow-inner overflow-y-auto">
+                  {whatsappSummary}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <button 
+                    onClick={() => { copyToClipboard(); setShowMobileReceipt(false); }}
+                    className="py-5 bg-emerald-500 text-black rounded-3xl font-black text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-2"
+                  >
+                    <Copy className="w-5 h-5" /> Copy
+                  </button>
+                  <button 
+                    onClick={() => {
+                      const url = `whatsapp://send?text=${encodeURIComponent(whatsappSummary)}`;
+                      window.open(url, '_blank');
+                    }}
+                    className="py-5 bg-white/5 border border-white/10 text-white rounded-3xl font-black text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-2"
+                  >
+                    <ArrowUpRight className="w-5 h-5" /> Forward
+                  </button>
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
+
+        {/* STATUS TOASTS */}
+        <AnimatePresence>
+          {status && (
+            <motion.div 
+              initial={{ opacity: 0, y: -50, x: '-50%' }}
+              animate={{ opacity: 1, y: 0, x: '-50%' }}
+              exit={{ opacity: 0, y: -50, x: '-50%' }}
+              className={`fixed top-8 left-1/2 z-[100] px-8 py-4 rounded-3xl shadow-2xl flex items-center gap-4 border border-white/10 backdrop-blur-2xl ${
+                status.type === 'success' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+              }`}
+            >
+              <div className={`p-1.5 rounded-lg ${status.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'} text-black`}>
+                {status.type === 'success' ? <Check className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+              </div>
+              <span className="font-black text-xs uppercase tracking-widest">{status.msg}</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* FOOTER SYNC STATUS (Desktop) */}
+      <footer className="fixed bottom-0 left-0 right-0 bg-[#020617]/80 backdrop-blur-xl border-t border-white/5 px-8 py-3 z-30 hidden md:flex items-center justify-between">
+        <div className="flex items-center gap-6">
+           <div className="flex items-center gap-2">
+            <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-indigo-500 animate-ping' : 'bg-emerald-500'}`} />
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{isSyncing ? 'Synchronizing Node' : 'System Ready'}</span>
+          </div>
+          <div className="h-3 w-px bg-white/10" />
+          <div className="text-[9px] font-mono text-slate-600 uppercase">Latency: 24ms</div>
+        </div>
+        
+        <div className="flex items-center gap-4">
+           {isDirty && (
+             <span className="text-[9px] font-black text-amber-500 uppercase tracking-widest animate-pulse">Unsaved Local Draft Active</span>
+           )}
+           <button onClick={loadData} className="p-1 hover:text-indigo-400 transition-colors">
+              <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+           </button>
+        </div>
+      </footer>
     </div>
   );
 }
