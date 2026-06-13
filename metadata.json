@@ -1,0 +1,6 @@
+{
+  "name": "Daily Retail Sales Tracker",
+  "description": "Track daily sales, calculate monthly stats, and scan visual receipt logs with Gemini vision AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
