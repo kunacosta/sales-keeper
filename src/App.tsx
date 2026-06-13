@@ -224,6 +224,23 @@ export default function App() {
   }, [brands, stats, draftSales, entryDate]);
 
   // --- HANDLERS ---
+  const handleKeyDown = (e: React.KeyboardEvent, brandId: string, field: 'rm' | 'qty') => {
+    const currentIndex = filteredBrands.findIndex(b => b.id === brandId);
+    if (e.key === 'ArrowDown') {
+      const nextBrand = filteredBrands[currentIndex + 1];
+      if (nextBrand) {
+        const nextInput = document.querySelector(`[data-brand="${nextBrand.id}"][data-field="${field}"]`) as HTMLInputElement;
+        nextInput?.focus();
+      }
+    } else if (e.key === 'ArrowUp') {
+      const prevBrand = filteredBrands[currentIndex - 1];
+      if (prevBrand) {
+        const prevInput = document.querySelector(`[data-brand="${prevBrand.id}"][data-field="${field}"]`) as HTMLInputElement;
+        prevInput?.focus();
+      }
+    }
+  };
+
   const handleInputChange = (brandId: string, field: 'rm' | 'qty', value: string) => {
     setDraftSales(prev => ({
       ...prev,
@@ -328,9 +345,14 @@ export default function App() {
                       <td className="p-2">
                         <input 
                           type="number"
+                          step="any"
                           inputMode="decimal"
+                          data-brand={brand.id}
+                          data-field="rm"
                           value={draftSales[brand.id]?.rm || ''}
                           onChange={e => handleInputChange(brand.id, 'rm', e.target.value)}
+                          onKeyDown={e => handleKeyDown(e, brand.id, 'rm')}
+                          onFocus={e => e.target.select()}
                           placeholder="0.00"
                           className="w-full bg-[#020617]/50 border border-white/5 rounded-xl p-2.5 text-center text-white font-mono text-sm focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 outline-none transition-all"
                         />
@@ -339,8 +361,12 @@ export default function App() {
                          <input 
                           type="number"
                           inputMode="numeric"
+                          data-brand={brand.id}
+                          data-field="qty"
                           value={draftSales[brand.id]?.qty || ''}
                           onChange={e => handleInputChange(brand.id, 'qty', e.target.value)}
+                          onKeyDown={e => handleKeyDown(e, brand.id, 'qty')}
+                          onFocus={e => e.target.select()}
                           placeholder="0"
                           className="w-full bg-[#020617]/50 border border-white/5 rounded-xl p-2.5 text-center text-white font-mono text-sm focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 outline-none transition-all"
                         />
