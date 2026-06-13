@@ -77,8 +77,46 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
+interface SyncOperation {
+  id: string;
+  type: 'SAVE_DAILY_SALES' | 'SAVE_BRAND' | 'DELETE_BRAND' | 'SAVE_BRANDS_ORDER' | 'RESET_MONTHLY_SALES';
+  payload: any;
+  timestamp: number;
+}
+
+function getSyncQueue(): SyncOperation[] {
+  if (typeof window === 'undefined') return [];
+  const data = localStorage.getItem('retail_sales_sync_queue');
+  if (data) {
+    try {
+      return JSON.parse(data);
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function setSyncQueue(queue: SyncOperation[]) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('retail_sales_sync_queue', JSON.stringify(queue));
+}
+
+function addToSyncQueue(type: SyncOperation['type'], payload: any) {
+  const queue = getSyncQueue();
+  const op: SyncOperation = {
+    id: `sync_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    type,
+    payload,
+    timestamp: Date.now()
+  };
+  queue.push(op);
+  setSyncQueue(queue);
+}
+
 // Local Storage Fallback Helpers
 function getLocalBrands(): Brand[] {
+  if (typeof window === 'undefined') return [];
   const data = localStorage.getItem('retail_sales_brands');
   if (data) {
     try {
@@ -99,10 +137,12 @@ function getLocalBrands(): Brand[] {
 }
 
 function setLocalBrands(brands: Brand[]) {
+  if (typeof window === 'undefined') return;
   localStorage.setItem('retail_sales_brands', JSON.stringify(brands));
 }
 
 function getLocalSales(): DailySale[] {
+  if (typeof window === 'undefined') return [];
   const data = localStorage.getItem('retail_sales_daily');
   if (data) {
     try {
@@ -115,22 +155,111 @@ function getLocalSales(): DailySale[] {
 }
 
 function setLocalSales(sales: DailySale[]) {
+  if (typeof window === 'undefined') return;
   localStorage.setItem('retail_sales_daily', JSON.stringify(sales));
 }
 
 // Main State Service
 export const stateService = {
   /**
+   * Returns true if there are pending operations in the sync queue.
+   */
+  isSyncing(): boolean {
+    return getSyncQueue().length > 0;
+  },
+
+  /**
+   * Processes the sync queue in the background.
+   */
+  async syncOfflineData(): Promise<void> {
+    if (isPlaceholder || !db || !navigator.onLine) return;
+
+    const queue = getSyncQueue();
+    if (queue.length === 0) return;
+
+    console.log(`Processing sync queue: ${queue.length} items`);
+    const remainingQueue: SyncOperation[] = [...queue];
+
+    for (const op of queue) {
+      try {
+        switch (op.type) {
+          case 'SAVE_DAILY_SALES': {
+            const { date, recordsToSave } = op.payload;
+            const batch = writeBatch(db);
+            recordsToSave.forEach((record: any) => {
+              const ref = doc(db, 'daily_sales', record.id);
+              const dataToSave: any = {
+                date: record.date,
+                brandId: record.brandId,
+                salesAmount: record.salesAmount,
+                quantitySold: record.quantitySold
+              };
+              if (record.mtdSalesAmount !== undefined) dataToSave.mtdSalesAmount = record.mtdSalesAmount;
+              if (record.mtdQuantitySold !== undefined) dataToSave.mtdQuantitySold = record.mtdQuantitySold;
+              batch.set(ref, dataToSave);
+            });
+            await batch.commit();
+            break;
+          }
+          case 'SAVE_BRAND': {
+            const { id, name, sortOrder } = op.payload;
+            await setDoc(doc(db, 'brands', id), { name, sortOrder });
+            break;
+          }
+          case 'DELETE_BRAND': {
+            await deleteDoc(doc(db, 'brands', op.payload.id));
+            break;
+          }
+          case 'SAVE_BRANDS_ORDER': {
+            const batch = writeBatch(db);
+            op.payload.orderedBrands.forEach((b: Brand) => {
+              batch.set(doc(db, 'brands', b.id), { name: b.name, sortOrder: b.sortOrder });
+            });
+            await batch.commit();
+            break;
+          }
+          case 'RESET_MONTHLY_SALES': {
+            const { datePrefix } = op.payload;
+            const start = `${datePrefix}-01`;
+            const end = `${datePrefix}-31`;
+            const q = query(collection(db, 'daily_sales'), where('date', '>=', start), where('date', '<=', end));
+            const snapshot = await getDocs(q);
+            const batch = writeBatch(db);
+            snapshot.forEach((snapDoc) => batch.delete(snapDoc.ref));
+            await batch.commit();
+            break;
+          }
+        }
+        // Success: remove from remaining queue
+        const idx = remainingQueue.findIndex(item => item.id === op.id);
+        if (idx > -1) remainingQueue.splice(idx, 1);
+        setSyncQueue(remainingQueue);
+      } catch (err) {
+        console.error(`Sync failed for operation ${op.id}:`, err);
+        // If it's a network error, stop processing and retry later
+        if (!navigator.onLine) break;
+      }
+    }
+  },
+
+  /**
    * Fetches all brands, ordered by sortOrder. If Firestore is empty or and placeholder is active, seeds brands first.
    */
   async getBrands(): Promise<Brand[]> {
-    if (isPlaceholder || !db) {
-      return getLocalBrands().sort((a, b) => a.sortOrder - b.sortOrder);
-    }
+    // Return local immediately
+    const local = getLocalBrands().sort((a, b) => a.sortOrder - b.sortOrder);
+    
+    if (isPlaceholder || !db) return local;
 
+    // Trigger background fetch to update local mirror
+    this._refreshBrandsFromFirestore();
+    
+    return local;
+  },
+
+  async _refreshBrandsFromFirestore() {
     try {
-      const q = query(collection(db, 'brands'));
-      const snapshot = await getDocs(q);
+      const snapshot = await getDocs(query(collection(db, 'brands')));
       const list: Brand[] = [];
       snapshot.forEach((snapDoc) => {
         const d = snapDoc.data();
@@ -141,32 +270,25 @@ export const stateService = {
         });
       });
 
-      if (list.length === 0) {
-        // Automatically seed Firestore with default brands
-        console.log('Seeding Firestore with default brands...');
+      if (list.length > 0) {
+        list.sort((a, b) => a.sortOrder - b.sortOrder);
+        setLocalBrands(list);
+      } else {
+        // Seed if empty
         const batch = writeBatch(db);
         const seededList: Brand[] = [];
         for (let i = 0; i < SEED_BRANDS.length; i++) {
           const brandId = `brand_${SEED_BRANDS[i].toLowerCase().replace(/[^a-z0-9]/g, '_')}_${i}`;
           const brandRef = doc(db, 'brands', brandId);
-          const brandData = {
-            name: SEED_BRANDS[i],
-            sortOrder: i + 1
-          };
+          const brandData = { name: SEED_BRANDS[i], sortOrder: i + 1 };
           batch.set(brandRef, brandData);
           seededList.push({ id: brandId, ...brandData });
         }
         await batch.commit();
         setLocalBrands(seededList);
-        return seededList;
       }
-
-      list.sort((a, b) => a.sortOrder - b.sortOrder);
-      setLocalBrands(list); // keeps local storage mirrored
-      return list;
     } catch (err) {
-      console.warn("Could not load from Firestore. Using local storage.", err);
-      return getLocalBrands().sort((a, b) => a.sortOrder - b.sortOrder);
+      console.warn("Background brands refresh failed", err);
     }
   },
 
@@ -175,223 +297,89 @@ export const stateService = {
    */
   async saveBrand(name: string, sortOrder: number, id?: string): Promise<Brand> {
     const brandName = name.trim();
-    if (!brandName) {
-      throw new Error("Brand name cannot be empty");
-    }
+    if (!brandName) throw new Error("Brand name cannot be empty");
 
-    // Load existing to verify uniqueness
-    const brands = await this.getBrands();
-    const dup = brands.find(b => b.name.toLowerCase() === brandName.toLowerCase() && b.id !== id);
-    if (dup) {
-      throw new Error(`A brand named "${brandName}" already exists.`);
-    }
-
+    const brands = getLocalBrands();
     const targetId = id || `brand_${Date.now()}`;
-    const newBrand: Brand = {
-      id: targetId,
-      name: brandName,
-      sortOrder
-    };
+    const newBrand: Brand = { id: targetId, name: brandName, sortOrder };
 
-    if (isPlaceholder || !db) {
-      const updated = brands.filter(b => b.id !== targetId);
-      updated.push(newBrand);
-      setLocalBrands(updated);
-      return newBrand;
-    }
+    // 1. Update Local
+    const updated = brands.filter(b => b.id !== targetId);
+    updated.push(newBrand);
+    setLocalBrands(updated);
 
-    try {
-      const brandRef = doc(db, 'brands', targetId);
-      await setDoc(brandRef, {
-        name: brandName,
-        sortOrder
-      });
-      // updating local mirror
-      const updated = brands.filter(b => b.id !== targetId);
-      updated.push(newBrand);
-      setLocalBrands(updated);
-      return newBrand;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `brands/${targetId}`);
-      // Fallback
-      const updated = brands.filter(b => b.id !== targetId);
-      updated.push(newBrand);
-      setLocalBrands(updated);
-      return newBrand;
-    }
+    // 2. Add to Sync Queue
+    addToSyncQueue('SAVE_BRAND', { id: targetId, name: brandName, sortOrder });
+
+    // 3. Trigger background sync
+    this.syncOfflineData();
+
+    return newBrand;
   },
 
   /**
    * Saves the sorted list order in bulk
    */
   async saveBrandsOrder(orderedBrands: Brand[]): Promise<void> {
-    if (isPlaceholder || !db) {
-      setLocalBrands(orderedBrands);
-      return;
-    }
-
-    try {
-      const batch = writeBatch(db);
-      orderedBrands.forEach((b) => {
-        const ref = doc(db, 'brands', b.id);
-        batch.set(ref, {
-          name: b.name,
-          sortOrder: b.sortOrder
-        });
-      });
-      await batch.commit();
-      setLocalBrands(orderedBrands);
-    } catch (err) {
-      console.error("Bulk sort order save failed on Firestore. Mirroring to local storage.", err);
-      setLocalBrands(orderedBrands);
-    }
+    setLocalBrands(orderedBrands);
+    addToSyncQueue('SAVE_BRANDS_ORDER', { orderedBrands });
+    this.syncOfflineData();
   },
 
   /**
    * Deletes a brand
    */
   async deleteBrand(id: string): Promise<void> {
-    const brands = await this.getBrands();
+    const brands = getLocalBrands();
     const updated = brands.filter(b => b.id !== id);
     setLocalBrands(updated);
 
-    if (isPlaceholder || !db) {
-      return;
-    }
-
-    try {
-      const ref = doc(db, 'brands', id);
-      await deleteDoc(ref);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `brands/${id}`);
-    }
+    addToSyncQueue('DELETE_BRAND', { id });
+    this.syncOfflineData();
   },
 
   /**
    * Fetches daily sales for a specific date
    */
   async getDailySales(date: string): Promise<DailySale[]> {
-    if (isPlaceholder || !db) {
-      const allSales = getLocalSales();
-      return allSales.filter(s => s.date === date);
-    }
-
-    try {
-      const q = query(collection(db, 'daily_sales'), where('date', '==', date));
-      const snapshot = await getDocs(q);
-      const list: DailySale[] = [];
-      snapshot.forEach((snapDoc) => {
-        const d = snapDoc.data();
-        list.push({
-          id: snapDoc.id,
-          date: d.date || date,
-          brandId: d.brandId || '',
-          salesAmount: typeof d.salesAmount === 'number' ? d.salesAmount : 0,
-          quantitySold: typeof d.quantitySold === 'number' ? d.quantitySold : 0,
-          mtdSalesAmount: typeof d.mtdSalesAmount === 'number' ? d.mtdSalesAmount : undefined,
-          mtdQuantitySold: typeof d.mtdQuantitySold === 'number' ? d.mtdQuantitySold : undefined
-        });
-      });
-      return list;
-    } catch (err) {
-      console.warn("Could not query daily sales from Firestore, falling back to cached local storage.", err);
-      const allSales = getLocalSales();
-      return allSales.filter(s => s.date === date);
-    }
+    const allSales = getLocalSales();
+    return allSales.filter(s => s.date === date);
   },
 
   /**
    * Saves daily sales inputs for multiple brands (bulk upsert)
    */
   async saveDailySales(date: string, salesInputs: SalesInput[]): Promise<void> {
-    // Write local first for responsiveness and safety
+    // 1. Update Local State INSTANTLY
     const allSales = getLocalSales();
     let updatedSales = allSales.filter(s => s.date !== date);
     
-    const recordsToSave = salesInputs.map(input => {
-      const record: DailySale = {
-        id: `${date}_${input.brandId}`,
-        date,
-        brandId: input.brandId,
-        salesAmount: input.salesAmount,
-        quantitySold: input.quantitySold,
-        mtdSalesAmount: input.mtdSalesAmount,
-        mtdQuantitySold: input.mtdQuantitySold
-      };
-      return record;
-    });
+    const recordsToSave = salesInputs.map(input => ({
+      id: `${date}_${input.brandId}`,
+      date,
+      brandId: input.brandId,
+      salesAmount: input.salesAmount,
+      quantitySold: input.quantitySold,
+      mtdSalesAmount: input.mtdSalesAmount,
+      mtdQuantitySold: input.mtdQuantitySold
+    }));
 
     updatedSales = [...updatedSales, ...recordsToSave];
     setLocalSales(updatedSales);
 
-    if (isPlaceholder || !db) {
-      return;
-    }
+    // 2. Add to sync queue for background processing
+    addToSyncQueue('SAVE_DAILY_SALES', { date, recordsToSave });
 
-    try {
-      const batch = writeBatch(db);
-      recordsToSave.forEach((record) => {
-        const ref = doc(db, 'daily_sales', record.id);
-        const dataToSave: any = {
-          date: record.date,
-          brandId: record.brandId,
-          salesAmount: record.salesAmount,
-          quantitySold: record.quantitySold
-        };
-        if (record.mtdSalesAmount !== undefined) {
-          dataToSave.mtdSalesAmount = record.mtdSalesAmount;
-        }
-        if (record.mtdQuantitySold !== undefined) {
-          dataToSave.mtdQuantitySold = record.mtdQuantitySold;
-        }
-        batch.set(ref, dataToSave);
-      });
-      await batch.commit();
-    } catch (err) {
-      console.error("Failed to commit daily sales to Firestore. Saved in local state.", err);
-    }
+    // 3. Trigger fire-and-forget sync
+    this.syncOfflineData();
   },
 
   /**
-   * Fetches the entire month's sales to compute dynamic Month-To-Date (MTD) totals
-   * Format of datePrefix: "YYYY-MM" (e.g. "2026-06")
+   * Fetches the entire month's sales from local storage
    */
   async getMonthlySales(datePrefix: string): Promise<DailySale[]> {
-    if (isPlaceholder || !db) {
-      const allSales = getLocalSales();
-      return allSales.filter(s => s.date.startsWith(datePrefix));
-    }
-
-    try {
-      // Query daily sales for selected month (since date format is YYYY-MM-DD, 
-      // we can filter between first day range YYYY-MM-01 and YYYY-MM-31)
-      const start = `${datePrefix}-01`;
-      const end = `${datePrefix}-31`;
-      const q = query(
-        collection(db, 'daily_sales'), 
-        where('date', '>=', start),
-        where('date', '<=', end)
-      );
-      const snapshot = await getDocs(q);
-      const list: DailySale[] = [];
-      snapshot.forEach((snapDoc) => {
-        const d = snapDoc.data();
-        list.push({
-          id: snapDoc.id,
-          date: d.date || '',
-          brandId: d.brandId || '',
-          salesAmount: typeof d.salesAmount === 'number' ? d.salesAmount : 0,
-          quantitySold: typeof d.quantitySold === 'number' ? d.quantitySold : 0,
-          mtdSalesAmount: typeof d.mtdSalesAmount === 'number' ? d.mtdSalesAmount : undefined,
-          mtdQuantitySold: typeof d.mtdQuantitySold === 'number' ? d.mtdQuantitySold : undefined
-        });
-      });
-      return list;
-    } catch (err) {
-      console.warn("Could not query monthly sales, falling back to local storage statistics.", err);
-      const allSales = getLocalSales();
-      return allSales.filter(s => s.date.startsWith(datePrefix));
-    }
+    const allSales = getLocalSales();
+    return allSales.filter(s => s.date.startsWith(datePrefix));
   },
 
   /**
@@ -402,26 +390,48 @@ export const stateService = {
     const filtered = allSales.filter(s => !s.date.startsWith(datePrefix));
     setLocalSales(filtered);
 
-    if (isPlaceholder || !db) {
-      return;
-    }
+    addToSyncQueue('RESET_MONTHLY_SALES', { datePrefix });
+    this.syncOfflineData();
+  },
 
-    try {
-      const start = `${datePrefix}-01`;
-      const end = `${datePrefix}-31`;
-      const q = query(
-        collection(db, 'daily_sales'), 
-        where('date', '>=', start),
-        where('date', '<=', end)
-      );
-      const snapshot = await getDocs(q);
-      const batch = writeBatch(db);
-      snapshot.forEach((snapDoc) => {
-        batch.delete(snapDoc.ref);
-      });
-      await batch.commit();
-    } catch (err) {
-      console.error("Failed to reset monthly sales on Firestore.", err);
-    }
+  /**
+   * Helper to calculate MTD totals and daily summaries from local data
+   */
+  getDashboardStats(date: string) {
+    const allSales = getLocalSales();
+    const datePrefix = date.substring(0, 7);
+    const monthSales = allSales.filter(s => s.date.startsWith(datePrefix));
+    
+    const stats: Record<string, { dailyRM: number, dailyQty: number, mtdRM: number, mtdQty: number }> = {};
+    const brands = getLocalBrands();
+
+    brands.forEach(b => {
+      const dEntry = monthSales.find(s => s.brandId === b.id && s.date === date);
+      const bMonthList = monthSales.filter(s => s.brandId === b.id && s.date <= date);
+      
+      let mtdRM = 0;
+      let mtdQty = 0;
+
+      // Find latest override if exists
+      const latestOverride = [...bMonthList].sort((a,b) => b.date.localeCompare(a.date)).find(s => s.mtdSalesAmount !== undefined);
+      
+      if (latestOverride) {
+        mtdRM = latestOverride.mtdSalesAmount || 0;
+        mtdQty = latestOverride.mtdQuantitySold || 0;
+      } else {
+        mtdRM = bMonthList.reduce((acc, s) => acc + s.salesAmount, 0);
+        mtdQty = bMonthList.reduce((acc, s) => acc + s.quantitySold, 0);
+      }
+
+      stats[b.id] = {
+        dailyRM: dEntry?.salesAmount || 0,
+        dailyQty: dEntry?.quantitySold || 0,
+        mtdRM,
+        mtdQty
+      };
+    });
+
+    return stats;
   }
 };
+

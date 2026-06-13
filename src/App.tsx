@@ -99,6 +99,12 @@ const StatCard = ({ title, value, icon: Icon, colorClass, suffix = "" }: { title
 // --- MAIN APP ---
 
 export default function App() {
+  // Hydration Guard
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // Navigation & UI State
   const [activeTab, setActiveTab] = useState<'dashboard' | 'admin'>('dashboard');
   const [entryMode, setEntryMode] = useState<'ops' | 'audit'>('ops'); // ops = daily, audit = MTD override
