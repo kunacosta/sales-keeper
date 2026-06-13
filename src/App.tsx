@@ -1,9 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Calendar, 
-  Upload, 
-  FileImage, 
-  Sparkles, 
   Trash2, 
   Plus, 
   ChevronUp, 
@@ -12,9 +9,12 @@ import {
   Copy, 
   TrendingUp, 
   AlertCircle, 
-  Layers, 
   SlidersHorizontal,
-  RefreshCw
+  RefreshCw,
+  Search,
+  PenLine,
+  X,
+  PlusCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { stateService, Brand, DailySale } from './lib/stateService.ts';
@@ -37,18 +37,23 @@ export default function App() {
   const [monthlySales, setMonthlySales] = useState<DailySale[]>([]);
   const [dailySalesInputs, setDailySalesInputs] = useState<{ [brandId: string]: { salesAmount: string; quantitySold: string } }>({});
   
+  // Choose brand selection state & temporary key-in inputs
+  const [selectedBrandId, setSelectedBrandId] = useState<string>('');
+  const [isBrandConfirmed, setIsBrandConfirmed] = useState<boolean>(false);
+  const [singleSalesAmount, setSingleSalesAmount] = useState<string>('');
+  const [singleQuantitySold, setSingleQuantitySold] = useState<string>('');
+  const [brandSearchQuery, setBrandSearchQuery] = useState<string>('');
+  const [showDropdown, setShowDropdown] = useState<boolean>(false);
+  const [showOnlyWithSales, setShowOnlyWithSales] = useState<boolean>(true);
+
   // Interaction/UI states
   const [loading, setLoading] = useState<boolean>(true);
-  const [aiParsing, setAiParsing] = useState<boolean>(false);
-  const [aiStatus, setAiStatus] = useState<string>('');
   const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
   
   // Brand management state
   const [newBrandName, setNewBrandName] = useState<string>('');
   const [brandError, setBrandError] = useState<string | null>(null);
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load basic configurations
   useEffect(() => {
@@ -79,6 +84,14 @@ export default function App() {
         };
       });
       setDailySalesInputs(initialInputs);
+      
+      // Reset active brand key-in selection on date change
+      setSelectedBrandId('');
+      setIsBrandConfirmed(false);
+      setBrandSearchQuery('');
+      setSingleSalesAmount('');
+      setSingleQuantitySold('');
+      
       setSaveStatus(null);
     } catch (err) {
       console.error('Error loading static dataset:', err);
@@ -139,15 +152,115 @@ export default function App() {
     }));
   };
 
+  // Select a brand to enter values (unconfirmed until "Done" is pressed)
+  const handleSelectBrand = (brandId: string) => {
+    const brand = brands.find(b => b.id === brandId);
+    if (brand) {
+      setSelectedBrandId(brandId);
+      setBrandSearchQuery(brand.name);
+      setSingleSalesAmount(dailySalesInputs[brandId]?.salesAmount || '');
+      setSingleQuantitySold(dailySalesInputs[brandId]?.quantitySold || '');
+    } else {
+      setSelectedBrandId('');
+      setSingleSalesAmount('');
+      setSingleQuantitySold('');
+    }
+  };
+
+  // User clicked "Done" to confirm their brand and start typing the numbers
+  const handleConfirmBrand = () => {
+    if (!selectedBrandId) return;
+    setIsBrandConfirmed(true);
+    
+    // Focus the sales amount input after confirming
+    setTimeout(() => {
+      const salesInput = document.getElementById('single-sales-amount-input');
+      if (salesInput) {
+        salesInput.focus();
+      }
+    }, 100);
+  };
+
+  // Cancel/Undo or change active selection
+  const handleCancelSelection = () => {
+    setIsBrandConfirmed(false);
+    setSelectedBrandId('');
+    setBrandSearchQuery('');
+    setSingleSalesAmount('');
+    setSingleQuantitySold('');
+  };
+
+  // Add/Update the keyed values for the active brand to the daily ledger
+  const applySingleBrandValues = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!selectedBrandId) return;
+
+    // Clean decimals for sales amount, clean numbers for quantity
+    const cleanAmt = singleSalesAmount.replace(/[^0-9.]/g, '');
+    const cleanQty = singleQuantitySold.replace(/[^0-9]/g, '');
+
+    setDailySalesInputs(prev => ({
+      ...prev,
+      [selectedBrandId]: {
+        salesAmount: cleanAmt,
+        quantitySold: cleanQty
+      }
+    }));
+
+    // Alert the user that they successfully mapped the item
+    const brandName = brands.find(b => b.id === selectedBrandId)?.name || 'Brand';
+    setSaveStatus({
+      type: 'success',
+      message: `Updated values for ${brandName}. Save Daily Sales to lock it in!`
+    });
+    setTimeout(() => setSaveStatus(null), 3500);
+
+    // Reset entry controls to select next brand rapidly
+    setSelectedBrandId('');
+    setIsBrandConfirmed(false);
+    setBrandSearchQuery('');
+    setSingleSalesAmount('');
+    setSingleQuantitySold('');
+  };
+
+  // Load an existing record into the interactive panel to edit/re-adjust it immediately
+  const loadBrandForEdit = (brandId: string) => {
+    const brand = brands.find(b => b.id === brandId);
+    if (brand) {
+      setSelectedBrandId(brandId);
+      setIsBrandConfirmed(true); // Straight to edit value inputs
+      setBrandSearchQuery(brand.name);
+      setSingleSalesAmount(dailySalesInputs[brandId]?.salesAmount || '');
+      setSingleQuantitySold(dailySalesInputs[brandId]?.quantitySold || '');
+      
+      // Auto scroll to key-in panel so user has focus
+      const panel = document.getElementById('brand-keyin-panel');
+      if (panel) {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      
+      // Auto focus key-in amount field
+      setTimeout(() => {
+        const salesInput = document.getElementById('single-sales-amount-input');
+        if (salesInput) {
+          salesInput.focus();
+        }
+      }, 200);
+    }
+  };
+
   // Save changes
   const handleSave = async () => {
     try {
       setLoading(true);
-      const inputs = Object.entries(dailySalesInputs).map(([brandId, val]) => ({
-        brandId,
-        salesAmount: parseFloat(val.salesAmount) || 0,
-        quantitySold: parseInt(val.quantitySold, 10) || 0
-      }));
+      const inputs = Object.entries(dailySalesInputs).map(([brandId, val]) => {
+        const item = val as { salesAmount: string; quantitySold: string };
+        return {
+          brandId,
+          salesAmount: parseFloat(item.salesAmount) || 0,
+          quantitySold: parseInt(item.quantitySold, 10) || 0
+        };
+      });
 
       await stateService.saveDailySales(selectedDate, inputs);
       
@@ -229,94 +342,6 @@ export default function App() {
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error('Clipboard copy failed:', err);
-    }
-  };
-
-  // AI OCR photo input handler
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    await processImageFile(file);
-  };
-
-  const processImageFile = async (file: File) => {
-    try {
-      setAiParsing(true);
-      setAiStatus('Reading raw photograph bytes...');
-      
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = async () => {
-        try {
-          const base64Data = reader.result as string;
-          setAiStatus('Orchestrating layout and contacting Gemini Vision AI...');
-
-          const brandNamesList = brands.map(b => b.name);
-
-          const response = await fetch('/api/parse-receipt', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              image: base64Data,
-              mimeType: file.type,
-              brands: brandNamesList
-            })
-          });
-
-          const data = await response.json();
-
-          if (!response.ok) {
-            throw new Error(data.error || 'Server parsing request returned an error.');
-          }
-
-          if (data && Array.isArray(data.sales)) {
-            setAiStatus('Mapping extracted data into brand fields...');
-            
-            // Map sales elements to current brand inputs
-            const updatedInputs = { ...dailySalesInputs };
-            
-            data.sales.forEach((item: { brand: string; sales_amount: number; quantity_sold: number }) => {
-              // Exact match or fuzzy case insensitive search
-              const foundBrand = brands.find(b => b.name.toLowerCase() === item.brand.toLowerCase());
-              if (foundBrand) {
-                updatedInputs[foundBrand.id] = {
-                  salesAmount: item.sales_amount > 0 ? String(item.sales_amount) : '',
-                  quantitySold: item.quantity_sold > 0 ? String(item.quantity_sold) : ''
-                };
-              }
-            });
-
-            setDailySalesInputs(updatedInputs);
-            setSaveStatus({
-              type: 'success',
-              message: 'Gemini AI successfully extracted sales values.'
-            });
-            setTimeout(() => setSaveStatus(null), 3000);
-          } else {
-            throw new Error('Unrecognized response format from Gemini engine.');
-          }
-
-        } catch (err: any) {
-          console.error(err);
-          setSaveStatus({
-            type: 'error',
-            message: `AI Error: ${err.message}`
-          });
-        } finally {
-          setAiParsing(false);
-          setAiStatus('');
-        }
-      };
-    } catch (err: any) {
-      setAiParsing(false);
-      setAiStatus('');
-      setSaveStatus({
-        type: 'error',
-        message: `Failed to load file: ${err.message}`
-      });
     }
   };
 
@@ -514,69 +539,237 @@ export default function App() {
               </div>
             </div>
 
-            {/* AI Photo Scan Panel */}
-            <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-xs relative overflow-hidden">
-              <div className="absolute top-0 right-0 p-4 bg-indigo-50 text-indigo-500 rounded-bl-2xl text-xs font-bold flex items-center gap-1">
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>AI Core Engine</span>
+            {/* INTERACTIVE BRAND SELECTOR & KEY-IN PANEL */}
+            <div id="brand-keyin-panel" className="bg-white p-5 rounded-2xl border border-indigo-150 shadow-md relative overflow-hidden transition-all duration-300">
+              <div className="absolute top-0 right-0 p-3 bg-indigo-50 text-indigo-600 rounded-bl-xl text-xs font-bold tracking-wide">
+                Interactive Wizard
               </div>
 
-              <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-indigo-500" />
-                    Auto-Fill Sales from Receipt Photo
-                  </h3>
-                  <p className="text-slate-500 text-sm mt-1 max-w-xl">
-                    Take a snapshot or select an image file of the checkout paper register. 
-                    Gemini Vision OCR will read values and auto-fill sales outputs dynamically for active brands below.
-                  </p>
-                </div>
+              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2 mb-1">
+                <PlusCircle className="w-5.5 h-5.5 text-indigo-600" />
+                {!isBrandConfirmed ? "Step 1: Choose Brand Category" : "Step 2: Key-In Values"}
+              </h2>
+              <p className="text-slate-500 text-sm max-w-2xl mb-4">
+                {!isBrandConfirmed 
+                  ? "Select a watch brand button from our active inventory below, then press Done. Brand buttons with an existing daily sheet entry display a green check indicator."
+                  : "Type in the sales figures (RM) and quantity sold for the active watch brand today. Mistake? Easily press Select Another Brand."
+                }
+              </p>
 
-                {/* Photo Dropzone Block */}
-                <div 
-                  className={`w-full md:w-auto min-w-[240px] border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-all duration-200 ${
-                    aiParsing 
-                      ? 'bg-indigo-50 border-indigo-300' 
-                      : 'bg-stone-50 border-slate-200 hover:border-indigo-400 hover:bg-slate-100'
-                  }`}
-                  onClick={() => !aiParsing && fileInputRef.current?.click()}
-                >
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handlePhotoUpload}
-                    accept="image/*"
-                    className="hidden"
-                    disabled={aiParsing}
-                  />
+              {!isBrandConfirmed ? (
+                // STEP 1: VISUAL BUTTONS SELECTION GRID
+                <div className="flex flex-col gap-3">
+                  {/* Filter box */}
+                  <div className="relative max-w-md w-full">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                      <Search className="w-4 h-4" />
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="Type style or brand name to filter (e.g. Seiko, Casio...)"
+                      value={brandSearchQuery}
+                      onChange={(e) => setBrandSearchQuery(e.target.value)}
+                      className="w-full text-sm font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-10 py-2.5 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    />
+                    {brandSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setBrandSearchQuery('')}
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-150 rounded"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
 
-                  {aiParsing ? (
-                    <div className="flex flex-col items-center gap-2 py-2">
-                      <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin" />
-                      <span className="text-sm font-semibold text-indigo-800">Processing Document...</span>
-                      <p className="text-xs text-indigo-500 font-medium px-2">{aiStatus}</p>
+                  {/* Buttons Grid container */}
+                  <div className="p-2.5 bg-slate-50 border border-slate-150 rounded-xl max-h-60 overflow-y-auto">
+                    {brands.length === 0 ? (
+                      <div className="p-6 text-center text-xs text-slate-400 font-medium">
+                        No brands active currently. Setup brands in "Brands Setup" first!
+                      </div>
+                    ) : (() => {
+                      const list = brands.filter(b => b.name.toLowerCase().includes(brandSearchQuery.toLowerCase()));
+                      if (list.length === 0) {
+                        return (
+                          <div className="p-6 text-center text-xs text-slate-400 font-medium whitespace-normal">
+                            No matching brands matching "{brandSearchQuery}"
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                          {list.map((b) => {
+                            const isSelected = selectedBrandId === b.id;
+                            const hasValues = parseFloat(dailySalesInputs[b.id]?.salesAmount || '0') > 0 || parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10) > 0;
+                            return (
+                              <button
+                                key={b.id}
+                                type="button"
+                                onDoubleClick={() => {
+                                  handleSelectBrand(b.id);
+                                  // Instantly trigger confirm on double click
+                                  setIsBrandConfirmed(true);
+                                  setTimeout(() => {
+                                    const salesInput = document.getElementById('single-sales-amount-input');
+                                    if (salesInput) salesInput.focus();
+                                  }, 150);
+                                }}
+                                onClick={() => handleSelectBrand(b.id)}
+                                className={`group relative py-3 px-4 rounded-xl text-xs font-bold transition-all text-center flex flex-col justify-center items-center gap-1 border border-solid select-none active:scale-97 cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-indigo-600 text-white border-indigo-600 ring-2 ring-indigo-300 shadow-md scale-102'
+                                    : hasValues
+                                      ? 'bg-indigo-50/70 text-indigo-900 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300'
+                                      : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-400 hover:bg-slate-50'
+                                }`}
+                              >
+                                {hasValues && (
+                                  <span className="absolute top-1 right-1 flex h-2 w-2">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                  </span>
+                                )}
+                                <span className="truncate max-w-full">{b.name}</span>
+                                {hasValues && (
+                                  <span className="text-[9px] text-emerald-650 opacity-90 font-semibold uppercase mt-0.5 tracking-tight">
+                                    RM {parseFloat(dailySalesInputs[b.id]?.salesAmount || '0').toFixed(0)} ({parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10)}⌚)
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Selection footer */}
+                  <div className="flex items-center justify-between gap-4 mt-1 flex-wrap">
+                    <div className="text-xs font-medium text-slate-500">
+                      {selectedBrandId ? (
+                        <span>
+                          Selected: <strong className="text-indigo-600 text-sm font-bold bg-indigo-50 px-2 py-0.5 rounded-lg">{brands.find(b => b.id === selectedBrandId)?.name}</strong> (Double-click button to skip next screen)
+                        </span>
+                      ) : (
+                        <span className="text-amber-600 font-semibold">• Tap on a brand button to select it</span>
+                      )}
                     </div>
-                  ) : (
-                    <div className="flex flex-col items-center gap-2">
-                      <Upload className="w-7 h-7 text-indigo-500" />
-                      <span className="text-sm font-bold text-slate-700">Upload or Snap Photo</span>
-                      <p className="text-2xs text-slate-500 font-medium">Supports JPG, PNG with checkout ledger lines</p>
-                    </div>
-                  )}
+                    <button
+                      type="button"
+                      disabled={!selectedBrandId}
+                      onClick={handleConfirmBrand}
+                      className="py-2.5 px-6 font-bold text-sm bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-xl transition-all shadow-sm flex items-center gap-1.5 ml-auto active:scale-98 cursor-pointer"
+                    >
+                      <span>Done, Enter Values</span>
+                      <Check className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                // STEP 2: ACTIVE KEY-IN SHEET
+                <form onSubmit={applySingleBrandValues} className="bg-indigo-50/35 p-4 border border-indigo-100 rounded-2xl flex flex-col gap-4 mt-2">
+                  <div className="flex items-center justify-between flex-wrap gap-2 pb-2.5 border-b border-indigo-100/55">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Keying product today:</span>
+                      <strong className="text-slate-800 text-lg font-extrabold tracking-tight">
+                        {brands.find(b => b.id === selectedBrandId)?.name}
+                      </strong>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleCancelSelection}
+                      className="text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-150 px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 active:scale-97 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Wrong Brand? Reselect</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+                    {/* Sales RM */}
+                    <div className="md:col-span-5">
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+                        Sales Amount (RM)
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">RM</span>
+                        <input
+                          id="single-sales-amount-input"
+                          type="text"
+                          placeholder="0.00"
+                          value={singleSalesAmount}
+                          onChange={(e) => setSingleSalesAmount(e.target.value.replace(/[^0-9.]/g, ''))}
+                          className="w-full text-right text-sm font-semibold bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Quantity Sold */}
+                    <div className="md:col-span-4">
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+                        Quantity Sold
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="0"
+                        value={singleQuantitySold}
+                        onChange={(e) => setSingleQuantitySold(e.target.value.replace(/[^0-9]/g, ''))}
+                        className="w-full text-center text-sm font-semibold bg-white border border-slate-200 rounded-xl py-3 outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500"
+                      />
+                    </div>
+
+                    {/* Action Trigger */}
+                    <div className="md:col-span-3">
+                      <button
+                        type="submit"
+                        className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5 active:scale-98 cursor-pointer"
+                      >
+                        <Check className="w-4 h-4" />
+                        <span>Apply to List</span>
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              )}
             </div>
 
-            {/* Brands inputs and list */}
+            {/* Current day's summary and dynamic ledger grids */}
             <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-                <span className="text-sm font-bold text-slate-800">
-                  Daily Brands Ledger ({brands.length} active brands)
-                </span>
-                <span className="text-xs font-semibold text-slate-500 bg-white border border-slate-200 px-2.5 py-1 rounded-md">
-                   Currency RM (Malaysian Ringgit)
-                </span>
+              <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-slate-800">
+                    Daily Sales Ledger
+                  </span>
+                  <span className="text-2xs font-bold px-2 py-0.5 bg-slate-250 text-slate-600 rounded-full uppercase tracking-wider">
+                    {selectedDate}
+                  </span>
+                </div>
+
+                {/* Filter and layout tabs */}
+                <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs font-bold">
+                  <button
+                    onClick={() => setShowOnlyWithSales(true)}
+                    className={`px-3 py-1.5 rounded-md transition-all ${
+                      showOnlyWithSales 
+                        ? 'bg-white text-indigo-600 shadow-xs' 
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    Entered Today ({brands.filter(b => (parseFloat(dailySalesInputs[b.id]?.salesAmount) > 0 || parseInt(dailySalesInputs[b.id]?.quantitySold, 10) > 0)).length})
+                  </button>
+                  <button
+                    onClick={() => setShowOnlyWithSales(false)}
+                    className={`px-3 py-1.5 rounded-md transition-all ${
+                      !showOnlyWithSales 
+                        ? 'bg-white text-indigo-600 shadow-xs' 
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    Show All ({brands.length})
+                  </button>
+                </div>
               </div>
 
               {loading ? (
@@ -590,56 +783,108 @@ export default function App() {
                 </div>
               ) : (
                 <div className="divide-y divide-slate-100">
-                  {brands.map((brand) => {
-                    const savedMtd = getBrandMTD(brand.id);
-                    return (
-                      <div 
-                        key={brand.id} 
-                        className="p-4 sm:px-6 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white hover:bg-slate-50/50 transition-colors"
-                      >
-                        {/* Brand Name Column */}
-                        <div className="min-w-[180px]">
-                          <span className="font-bold text-slate-800">{brand.name}</span>
-                          <div className="flex items-center gap-1 text-xs font-medium text-slate-500 mt-1">
-                            <span className="bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded text-2xs font-mono font-bold tracking-wider">
-                              MTD
-                            </span>
-                            <span>RM {savedMtd.salesAmount.toFixed(2)}</span>
-                            <span className="text-slate-300">•</span>
-                            <span>{savedMtd.quantitySold} Qty</span>
-                          </div>
-                        </div>
+                  {(() => {
+                    const filteredBrands = showOnlyWithSales
+                      ? brands.filter(b => {
+                          const amt = parseFloat(dailySalesInputs[b.id]?.salesAmount || '0') || 0;
+                          const qty = parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10) || 0;
+                          return amt > 0 || qty > 0;
+                        })
+                      : brands;
 
-                        {/* Input Fields Row */}
-                        <div className="flex items-center gap-4 flex-1 max-w-lg justify-start md:justify-end">
-                          <div className="flex-1 sm:max-w-[180px]">
-                            <label className="block sm:hidden text-2xs font-bold text-slate-400 uppercase mb-1">Sales RM</label>
-                            <div className="relative">
-                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">RM</span>
-                              <input
-                                type="text"
-                                value={dailySalesInputs[brand.id]?.salesAmount || ''}
-                                onChange={(e) => handleInputChange(brand.id, 'salesAmount', e.target.value)}
-                                placeholder="0.00"
-                                className="w-full text-right text-sm font-semibold bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500"
-                              />
+                    if (filteredBrands.length === 0) {
+                      return (
+                        <div className="p-12 text-center">
+                          <p className="text-slate-400 font-medium text-sm">No daily sales entries recorded so far for this date.</p>
+                          <p className="text-xs text-indigo-500 font-semibold mt-1.5">
+                            👉 Select a watch brand from the creator dropdown above to key in a record!
+                          </p>
+                        </div>
+                      );
+                    }
+
+                    return filteredBrands.map((brand) => {
+                      const savedMtd = getBrandMTD(brand.id);
+                      const hasValues = parseFloat(dailySalesInputs[brand.id]?.salesAmount || '0') > 0 || parseInt(dailySalesInputs[brand.id]?.quantitySold || '0', 10) > 0;
+                      
+                      return (
+                        <div 
+                          key={brand.id} 
+                          className={`p-4 sm:px-6 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
+                            selectedBrandId === brand.id 
+                              ? 'bg-indigo-50/45' 
+                              : hasValues 
+                                ? 'bg-indigo-50/10 hover:bg-indigo-50/20' 
+                                : 'bg-white hover:bg-slate-50/60'
+                          }`}
+                        >
+                          {/* Brand Info Column */}
+                          <div className="min-w-[200px]">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-800 text-base">{brand.name}</span>
+                              {hasValues && (
+                                <span className="inline-block w-2 h-2 rounded-full bg-indigo-500" title="Values keyed in for today" />
+                              )}
+                            </div>
+                            
+                            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 mt-1">
+                              <span className="bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded text-2xs font-mono font-bold tracking-wider">
+                                MTD
+                              </span>
+                              <span>RM {savedMtd.salesAmount.toFixed(2)}</span>
+                              <span className="text-slate-300">•</span>
+                              <span>{savedMtd.quantitySold} Qty</span>
                             </div>
                           </div>
 
-                          <div className="w-24 sm:w-28 shrink-0">
-                            <label className="block sm:hidden text-2xs font-bold text-slate-400 uppercase mb-1">Quantity</label>
-                            <input
-                              type="text"
-                              value={dailySalesInputs[brand.id]?.quantitySold || ''}
-                              onChange={(e) => handleInputChange(brand.id, 'quantitySold', e.target.value)}
-                              placeholder="0"
-                              className="w-full text-center text-sm font-semibold bg-slate-50 border border-slate-200 rounded-xl py-2 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500"
-                            />
+                          {/* Displays Selected Daily Metrics */}
+                          <div className="flex items-center gap-6 justify-start md:justify-end flex-wrap">
+                            <div className="flex items-baseline gap-1.5">
+                              <span className="text-2xs font-bold text-slate-400 uppercase tracking-wide">Sales Total:</span>
+                              <span className={`font-mono text-sm font-bold ${hasValues ? 'text-slate-800' : 'text-slate-400'}`}>
+                                RM {parseFloat(dailySalesInputs[brand.id]?.salesAmount || '0').toFixed(2)}
+                              </span>
+                            </div>
+
+                            <div className="flex items-baseline gap-1.5">
+                              <span className="text-2xs font-bold text-slate-400 uppercase tracking-wide font-medium">Quantity:</span>
+                              <span className={`font-mono text-sm font-bold ${hasValues ? 'text-slate-800' : 'text-slate-400'}`}>
+                                {parseInt(dailySalesInputs[brand.id]?.quantitySold || '0', 10)} sold
+                              </span>
+                            </div>
+
+                            {/* Rapid Action Buttons */}
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => loadBrandForEdit(brand.id)}
+                                className="px-3 py-1.5 text-xs font-bold bg-slate-100 hover:bg-indigo-100 text-slate-700 hover:text-indigo-700 rounded-lg flex items-center gap-1 transition-colors"
+                              >
+                                <PenLine className="w-3.5 h-3.5" />
+                                <span>Key-In</span>
+                              </button>
+
+                              {hasValues && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDailySalesInputs(prev => ({
+                                      ...prev,
+                                      [brand.id]: { salesAmount: '', quantitySold: '' }
+                                    }));
+                                  }}
+                                  title="Clear Entry"
+                                  className="p-1 px-1.5 hover:bg-rose-50 hover:text-rose-650 text-slate-400 rounded-lg transition-colors"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    });
+                  })()}
                 </div>
               )}
             </div>
