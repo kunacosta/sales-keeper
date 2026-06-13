@@ -37,14 +37,17 @@ export default function App() {
   const [monthlySales, setMonthlySales] = useState<DailySale[]>([]);
   const [dailySalesInputs, setDailySalesInputs] = useState<{ [brandId: string]: { salesAmount: string; quantitySold: string } }>({});
   
-  // Choose brand selection state & temporary key-in inputs
-  const [selectedBrandId, setSelectedBrandId] = useState<string>('');
+  // Choose brand selection state & temporary key-in inputs (Multi-Selection enabled)
+  const [selectedBrandIds, setSelectedBrandIds] = useState<string[]>([]);
   const [isBrandConfirmed, setIsBrandConfirmed] = useState<boolean>(false);
-  const [singleSalesAmount, setSingleSalesAmount] = useState<string>('');
-  const [singleQuantitySold, setSingleQuantitySold] = useState<string>('');
-  const [brandSearchQuery, setBrandSearchQuery] = useState<string>('');
-  const [showDropdown, setShowDropdown] = useState<boolean>(false);
+  const [wizardInputs, setWizardInputs] = useState<{ [brandId: string]: { salesAmount: string; quantitySold: string } }>({});
   const [showOnlyWithSales, setShowOnlyWithSales] = useState<boolean>(true);
+
+  // Batch Report Import States
+  const [rawTextToImport, setRawTextToImport] = useState<string>('');
+  const [showImportPanel, setShowImportPanel] = useState<boolean>(false);
+  const [importMessage, setImportMessage] = useState<{ type: 'success' | 'amber' | 'error'; text: string } | null>(null);
+  const [pendingInputs, setPendingInputs] = useState<{ [brandId: string]: { salesAmount: string; quantitySold: string } } | null>(null);
 
   // Interaction/UI states
   const [loading, setLoading] = useState<boolean>(true);
@@ -83,14 +86,19 @@ export default function App() {
           quantitySold: found && found.quantitySold > 0 ? String(found.quantitySold) : ''
         };
       });
-      setDailySalesInputs(initialInputs);
+      
+      if (pendingInputs) {
+        const merged = { ...initialInputs, ...pendingInputs };
+        setDailySalesInputs(merged);
+        setPendingInputs(null); // Reset queue
+      } else {
+        setDailySalesInputs(initialInputs);
+      }
       
       // Reset active brand key-in selection on date change
-      setSelectedBrandId('');
+      setSelectedBrandIds([]);
       setIsBrandConfirmed(false);
-      setBrandSearchQuery('');
-      setSingleSalesAmount('');
-      setSingleQuantitySold('');
+      setWizardInputs({});
       
       setSaveStatus(null);
     } catch (err) {
@@ -152,31 +160,43 @@ export default function App() {
     }));
   };
 
-  // Select a brand to enter values (unconfirmed until "Done" is pressed)
-  const handleSelectBrand = (brandId: string) => {
-    const brand = brands.find(b => b.id === brandId);
-    if (brand) {
-      setSelectedBrandId(brandId);
-      setBrandSearchQuery(brand.name);
-      setSingleSalesAmount(dailySalesInputs[brandId]?.salesAmount || '');
-      setSingleQuantitySold(dailySalesInputs[brandId]?.quantitySold || '');
-    } else {
-      setSelectedBrandId('');
-      setSingleSalesAmount('');
-      setSingleQuantitySold('');
-    }
+  // Clear all current selections
+  const handleClearSelectionState = () => {
+    setSelectedBrandIds([]);
   };
 
-  // User clicked "Done" to confirm their brand and start typing the numbers
+  // Select/Toggle a brand in multi-selection mode
+  const handleSelectBrand = (brandId: string) => {
+    setSelectedBrandIds(prev => {
+      if (prev.includes(brandId)) {
+        return prev.filter(id => id !== brandId);
+      } else {
+        return [...prev, brandId];
+      }
+    });
+  };
+
+  // User clicked "Done" to confirm selected brands and start typing the numbers
   const handleConfirmBrand = () => {
-    if (!selectedBrandId) return;
+    if (selectedBrandIds.length === 0) return;
+    
+    // Initialize wizard inputs with existing values from dailySalesInputs (or empty if none)
+    const initialWizardInputs: { [brandId: string]: { salesAmount: string; quantitySold: string } } = {};
+    selectedBrandIds.forEach(id => {
+      initialWizardInputs[id] = {
+        salesAmount: dailySalesInputs[id]?.salesAmount || '',
+        quantitySold: dailySalesInputs[id]?.quantitySold || ''
+      };
+    });
+    
+    setWizardInputs(initialWizardInputs);
     setIsBrandConfirmed(true);
     
-    // Focus the sales amount input after confirming
+    // Focus the first sales amount input field in the grid
     setTimeout(() => {
-      const salesInput = document.getElementById('single-sales-amount-input');
-      if (salesInput) {
-        salesInput.focus();
+      const firstInput = document.querySelector('.wizard-sales-input') as HTMLInputElement;
+      if (firstInput) {
+        firstInput.focus();
       }
     }, 100);
   };
@@ -184,54 +204,87 @@ export default function App() {
   // Cancel/Undo or change active selection
   const handleCancelSelection = () => {
     setIsBrandConfirmed(false);
-    setSelectedBrandId('');
-    setBrandSearchQuery('');
-    setSingleSalesAmount('');
-    setSingleQuantitySold('');
+    setSelectedBrandIds([]);
+    setWizardInputs({});
   };
 
-  // Add/Update the keyed values for the active brand to the daily ledger
-  const applySingleBrandValues = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!selectedBrandId) return;
-
-    // Clean decimals for sales amount, clean numbers for quantity
-    const cleanAmt = singleSalesAmount.replace(/[^0-9.]/g, '');
-    const cleanQty = singleQuantitySold.replace(/[^0-9]/g, '');
-
-    setDailySalesInputs(prev => ({
+  // Handle value key-in change for a specific brand in the active wizard
+  const handleWizardInputChange = (brandId: string, field: 'salesAmount' | 'quantitySold', value: string) => {
+    const cleanValue = value.replace(/[^0-9.]/g, '');
+    setWizardInputs(prev => ({
       ...prev,
-      [selectedBrandId]: {
-        salesAmount: cleanAmt,
-        quantitySold: cleanQty
+      [brandId]: {
+        ...prev[brandId],
+        [field]: cleanValue
       }
     }));
+  };
 
-    // Alert the user that they successfully mapped the item
-    const brandName = brands.find(b => b.id === selectedBrandId)?.name || 'Brand';
+  // Remove a brand from the current active key-in wizard (e.g. if selected by mistake)
+  const handleRemoveBrandFromWizard = (brandId: string) => {
+    const updatedIds = selectedBrandIds.filter(id => id !== brandId);
+    setSelectedBrandIds(updatedIds);
+    setWizardInputs(prev => {
+      const copy = { ...prev };
+      delete copy[brandId];
+      return copy;
+    });
+    
+    // If no brands are left, go back to Step 1
+    if (updatedIds.length === 0) {
+      setIsBrandConfirmed(false);
+    }
+  };
+
+  // Apply all keyed values from the wizard list to the dailySalesInputs daily ledger
+  const applyWizardBrandValues = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (selectedBrandIds.length === 0) return;
+
+    setDailySalesInputs(prev => {
+      const updated = { ...prev };
+      selectedBrandIds.forEach(id => {
+        const draft = wizardInputs[id];
+        if (draft) {
+          updated[id] = {
+            salesAmount: draft.salesAmount.replace(/[^0-9.]/g, ''),
+            quantitySold: draft.quantitySold.replace(/[^0-9]/g, '')
+          };
+        }
+      });
+      return updated;
+    });
+
+    // Alert the user that they successfully mapped the items
+    const brandNames = selectedBrandIds
+      .map(id => brands.find(b => b.id === id)?.name || '')
+      .filter(Boolean)
+      .join(', ');
+
     setSaveStatus({
       type: 'success',
-      message: `Updated values for ${brandName}. Save Daily Sales to lock it in!`
+      message: `Updated values for: ${brandNames}. Save Daily Sales to lock it in!`
     });
-    setTimeout(() => setSaveStatus(null), 3500);
+    setTimeout(() => setSaveStatus(null), 4000);
 
-    // Reset entry controls to select next brand rapidly
-    setSelectedBrandId('');
+    // Reset controls
+    setSelectedBrandIds([]);
+    setWizardInputs({});
     setIsBrandConfirmed(false);
-    setBrandSearchQuery('');
-    setSingleSalesAmount('');
-    setSingleQuantitySold('');
   };
 
   // Load an existing record into the interactive panel to edit/re-adjust it immediately
   const loadBrandForEdit = (brandId: string) => {
     const brand = brands.find(b => b.id === brandId);
     if (brand) {
-      setSelectedBrandId(brandId);
+      setSelectedBrandIds([brandId]);
+      setWizardInputs({
+        [brandId]: {
+          salesAmount: dailySalesInputs[brandId]?.salesAmount || '',
+          quantitySold: dailySalesInputs[brandId]?.quantitySold || ''
+        }
+      });
       setIsBrandConfirmed(true); // Straight to edit value inputs
-      setBrandSearchQuery(brand.name);
-      setSingleSalesAmount(dailySalesInputs[brandId]?.salesAmount || '');
-      setSingleQuantitySold(dailySalesInputs[brandId]?.quantitySold || '');
       
       // Auto scroll to key-in panel so user has focus
       const panel = document.getElementById('brand-keyin-panel');
@@ -241,9 +294,9 @@ export default function App() {
       
       // Auto focus key-in amount field
       setTimeout(() => {
-        const salesInput = document.getElementById('single-sales-amount-input');
-        if (salesInput) {
-          salesInput.focus();
+        const firstInput = document.querySelector('.wizard-sales-input') as HTMLInputElement;
+        if (firstInput) {
+          firstInput.focus();
         }
       }, 200);
     }
@@ -343,6 +396,182 @@ export default function App() {
     } catch (err) {
       console.error('Clipboard copy failed:', err);
     }
+  };
+
+  // ==========================================
+  // BATCH REPORT TEXT PARSER & IMPORT ROUTINES
+  // ==========================================
+  const extractDateFromText = (text: string): string | null => {
+    const monthShortMap: { [key: string]: string } = {
+      jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+      jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+      june: '06', july: '07', sept: '09'
+    };
+
+    // Case 1: DD MMM YY or DD MMM YYYY (separated by space, dash or slash)
+    const regex1 = /(\d{1,2})[\s\-/\\]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-/\\]+(\d{2,4})/i;
+    const match1 = text.match(regex1);
+    if (match1) {
+      const day = match1[1].padStart(2, '0');
+      const monthLabel = match1[2].toLowerCase();
+      const month = monthShortMap[monthLabel] || '01';
+      let year = match1[3];
+      if (year.length === 2) {
+        year = `20${year}`;
+      }
+      return `${year}-${month}-${day}`;
+    }
+
+    // Case 2: YYYY-MM-DD
+    const regex2 = /(\d{4})[-/](\d{1,2})[-/](\d{1,2})/;
+    const match2 = text.match(regex2);
+    if (match2) {
+      return `${match2[1]}-${match2[2].padStart(2, '0')}-${match2[3].padStart(2, '0')}`;
+    }
+
+    // Case 3: DD-MM-YYYY or DD/MM/YYYY
+    const regex3 = /(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/;
+    const match3 = text.match(regex3);
+    if (match3) {
+      const day = match3[1].padStart(2, '0');
+      const month = match3[2].padStart(2, '0');
+      let year = match3[3];
+      if (year.length === 2) {
+        year = `20${year}`;
+      }
+      return `${year}-${month}-${day}`;
+    }
+
+    return null;
+  };
+
+  const findBrandMatch = (brandRaw: string): Brand | undefined => {
+    const cleanStr = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const target = cleanStr(brandRaw);
+    if (!target) return undefined;
+    
+    // 1. Exact cleaned match
+    let found = brands.find(b => cleanStr(b.name) === target);
+    if (found) return found;
+
+    // 2. Contains match (as fallback)
+    found = brands.find(b => cleanStr(b.name).includes(target) || target.includes(cleanStr(b.name)));
+    return found;
+  };
+
+  const handleImportReport = () => {
+    setImportMessage(null);
+    if (!rawTextToImport.trim()) {
+      setImportMessage({ type: 'error', text: 'Please enter or paste report text first.' });
+      return;
+    }
+
+    const lines = rawTextToImport.split('\n');
+    const detectedDateStr = extractDateFromText(rawTextToImport);
+    const newInputs = { ...dailySalesInputs };
+    let matchCount = 0;
+    let totalLinesParsed = 0;
+
+    // Robust capture regex for lines like: Bonia =0/1798⌚0/3 or Naviforce =199/1594⌚2/11 or service =0/15⌚0/2
+    // We match "BrandName = todaySale/mtdSale⌚todayQty/mtdQty" or with space separators instead of "⌚"
+    const metricsRegex = /^([\d.\s]+)\/([\d.\s]+)(?:⌚|\s+|\/)([\d\s]+)\/([\d\s]+)/i;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.includes('=')) continue;
+
+      const delimiterIndex = trimmed.indexOf('=');
+      const brandRaw = trimmed.substring(0, delimiterIndex).trim();
+      const rightPart = trimmed.substring(delimiterIndex + 1).trim();
+
+      const foundBrand = findBrandMatch(brandRaw);
+      if (foundBrand) {
+        totalLinesParsed++;
+        // Clean out any spaces inside the right part for more consistent matches
+        const cleanedRightPart = rightPart.replace(/\s+/g, ' ');
+        const match = cleanedRightPart.match(metricsRegex);
+        if (match) {
+          const todaySale = match[1].trim();
+          const todayQty = match[3].trim();
+
+          const todaySaleNum = parseFloat(todaySale) || 0;
+          const todayQtyNum = parseInt(todayQty, 10) || 0;
+
+          newInputs[foundBrand.id] = {
+            salesAmount: todaySaleNum > 0 ? String(todaySaleNum) : '',
+            quantitySold: todayQtyNum > 0 ? String(todayQtyNum) : ''
+          };
+          matchCount++;
+        }
+      }
+    }
+
+    if (totalLinesParsed === 0) {
+      setImportMessage({
+        type: 'error',
+        text: 'Could not find any matching lines with format "Brand = TodaySale/MtdSale⌚TodayQty/MtdQty". Please check format.'
+      });
+      return;
+    }
+
+    // Helper closure to set state
+    const applyInputsOnCurrentDate = () => {
+      setDailySalesInputs(newInputs);
+      setImportMessage({
+        type: 'success',
+        text: `Extracted & mapped ${matchCount} matching brand entries successfully! Please click the "Save Daily Sales to Database" button at the bottom of the ledger to persist!`
+      });
+      setRawTextToImport('');
+    };
+
+    if (detectedDateStr && detectedDateStr !== selectedDate) {
+      if (window.confirm(`Detected date: ${detectedDateStr} (different from currently active ${selectedDate}). Would you like to switch active date to ${detectedDateStr} and import these records?`)) {
+        // Enqueue inputs so loadBaseData applies them for the new loaded date
+        setPendingInputs(newInputs);
+        setSelectedDate(detectedDateStr);
+        setImportMessage({
+          type: 'success',
+          text: `Switched reporting date to ${detectedDateStr}. Extracted & mapped ${matchCount} brand entries successfully. Click "Save Daily Sales to Database" below to compile!`
+        });
+        setRawTextToImport('');
+      } else {
+        // If they refuse, apply to the current active date anyway as requested
+        applyInputsOnCurrentDate();
+      }
+    } else {
+      applyInputsOnCurrentDate();
+    }
+  };
+
+  const loadJune12Example = () => {
+    setRawTextToImport(`12 Jun 26(MRT)
+*Sale RM 314
+
+BATTERY (CLOCK) =0/0⌚0/0
+Bigotti =0/625⌚0/2
+Bonia =0/1798⌚0/3
+Caesar =0/0⌚0/0
+Casio =0/2547⌚0/16
+Cro wc =0/818⌚0/5
+Chronctech =0/0⌚0/0
+Digitec =0/0⌚0/0
+Daniel klein =0/0⌚0/0
+J.bovier =0/0⌚0/0
+L. strap =0/69⌚0/1
+Mini Focus =0/0⌚0/0
+Naviforce =199/1594⌚2/11
+Pvc strap =0/0⌚0/0
+R-bat =0/120⌚0/3
+R&E =0/0⌚0/0
+REWARDS WATCH =0/0⌚0/1
+S-bat =87/1193⌚4/48
+Slo/pokemon =0/139.8⌚0/2
+S.parts =28/138⌚2/14
+Submarine =0/700⌚0/8
+service =0/15⌚0/2
+
+Total 1-12 Jun 26
+*Rm 9756.8`);
   };
 
   // View B: Brand management operations
@@ -539,7 +768,91 @@ export default function App() {
               </div>
             </div>
 
-            {/* INTERACTIVE BRAND SELECTOR & KEY-IN PANEL */}
+            {/* Collapsible Batch Importer Section */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="p-4 bg-gradient-to-r from-slate-50 to-indigo-50/40 flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-slate-100">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-lg shadow-xs">
+                    📝
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-sm">Batch Import / Paste Historical Report</h3>
+                    <p className="text-xs text-slate-500">Paste your structured text report (e.g. WhatsApp / legacy format) to auto-fill the daily records instantly.</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowImportPanel(!showImportPanel);
+                    setImportMessage(null);
+                  }}
+                  className="px-4 py-2 border border-slate-200 hover:border-indigo-300 text-indigo-600 hover:bg-indigo-50/20 font-bold text-xs rounded-xl shadow-2xs transition-all active:scale-97 cursor-pointer flex items-center gap-1.5"
+                >
+                  {showImportPanel ? 'Hide Importer' : 'Paste & Autofill Report'}
+                </button>
+              </div>
+
+              {showImportPanel && (
+                <div className="p-5 flex flex-col gap-4 animate-in fade-in duration-200">
+                  <div className="text-xs text-slate-500 bg-slate-50 rounded-xl p-3.5 border border-slate-150 leading-relaxed">
+                    <strong className="text-slate-700">Instructions:</strong> Paste the text report containing lines like <code className="bg-white px-1.5 py-0.5 rounded border font-mono text-indigo-600 text-[11px]">BrandName = 199/1594⌚2/11</code>. The tool will automatically locate the correct Watch Brand from your setup, parse today's sale price (<strong className="text-indigo-600">RM 199</strong>) and quantity sold (<strong className="text-indigo-600">2⌚</strong>), and map them. If a date is detected in the text (e.g. <code className="bg-white px-1.5 py-0.5 rounded border font-mono">12 Jun 26</code>), you will be asked to switch to that date automatically!
+                  </div>
+
+                  {importMessage && (
+                    <div className={`p-4 rounded-xl flex items-start gap-2.5 text-xs font-bold leading-normal border ${
+                      importMessage.type === 'success'
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        : importMessage.type === 'amber'
+                          ? 'bg-amber-50 border-amber-200 text-amber-800'
+                          : 'bg-rose-50 border-rose-200 text-rose-800'
+                    }`}>
+                      <AlertCircle className="w-4.5 h-4.5 shrink-0" />
+                      <div>{importMessage.text}</div>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                      <span>Report Textbox</span>
+                      <button
+                        type="button"
+                        onClick={loadJune12Example}
+                        className="text-[10px] text-indigo-600 font-bold bg-indigo-55 hover:bg-indigo-100/80 px-2 py-1 rounded transition-all active:scale-95 cursor-pointer"
+                      >
+                        Load June 12 Report Paste Example
+                      </button>
+                    </label>
+                    <textarea
+                      rows={8}
+                      placeholder="Paste your daily text here..."
+                      value={rawTextToImport}
+                      onChange={(e) => setRawTextToImport(e.target.value)}
+                      className="w-full text-xs font-mono font-medium p-3.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 placeholder:font-sans placeholder:text-slate-400"
+                    />
+                  </div>
+
+                  <div className="flex gap-3 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setRawTextToImport('')}
+                      className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 hover:text-slate-800 text-slate-500 text-xs font-bold rounded-xl transition-all active:scale-97 cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleImportReport}
+                      className="py-2.5 px-5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-md active:scale-97 cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>Analyze & Load Report</span>
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* INTERACTIVE BRAND SELECTOR & KEY-IN PANEL (MULTI-SELECT SUPPORTED) */}
             <div id="brand-keyin-panel" className="bg-white p-5 rounded-2xl border border-indigo-150 shadow-md relative overflow-hidden transition-all duration-300">
               <div className="absolute top-0 right-0 p-3 bg-indigo-50 text-indigo-600 rounded-bl-xl text-xs font-bold tracking-wide">
                 Interactive Wizard
@@ -547,117 +860,89 @@ export default function App() {
 
               <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2 mb-1">
                 <PlusCircle className="w-5.5 h-5.5 text-indigo-600" />
-                {!isBrandConfirmed ? "Step 1: Choose Brand Category" : "Step 2: Key-In Values"}
+                {!isBrandConfirmed 
+                  ? `Step 1: Choose Brand Category` 
+                  : `Step 2: Key-In Values (${selectedBrandIds.length} Brand${selectedBrandIds.length > 1 ? 's' : ''})`
+                }
               </h2>
               <p className="text-slate-500 text-sm max-w-2xl mb-4">
                 {!isBrandConfirmed 
-                  ? "Select a watch brand button from our active inventory below, then press Done. Brand buttons with an existing daily sheet entry display a green check indicator."
-                  : "Type in the sales figures (RM) and quantity sold for the active watch brand today. Mistake? Easily press Select Another Brand."
+                  ? "Select one or multiple watch brands by tapping the buttons below, then press Done. Brands with existing sales display a green badge."
+                  : "Type in today's sales figures (RM) and quantities sold for your selected brands. Correct mistakes by clicking the X next to any brand row."
                 }
               </p>
 
               {!isBrandConfirmed ? (
-                // STEP 1: VISUAL BUTTONS SELECTION GRID
+                // STEP 1: VISUAL BUTTONS SELECTION GRID (NO SEARCH BAR REQUIRED AS REQUESTED)
                 <div className="flex flex-col gap-3">
-                  {/* Filter box */}
-                  <div className="relative max-w-md w-full">
-                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                      <Search className="w-4 h-4" />
-                    </span>
-                    <input
-                      type="text"
-                      placeholder="Type style or brand name to filter (e.g. Seiko, Casio...)"
-                      value={brandSearchQuery}
-                      onChange={(e) => setBrandSearchQuery(e.target.value)}
-                      className="w-full text-sm font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-10 py-2.5 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    />
-                    {brandSearchQuery && (
-                      <button
-                        type="button"
-                        onClick={() => setBrandSearchQuery('')}
-                        className="absolute right-3.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-150 rounded"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-
                   {/* Buttons Grid container */}
-                  <div className="p-2.5 bg-slate-50 border border-slate-150 rounded-xl max-h-60 overflow-y-auto">
+                  <div className="p-2.5 bg-slate-50 border border-slate-150 rounded-xl max-h-72 overflow-y-auto">
                     {brands.length === 0 ? (
                       <div className="p-6 text-center text-xs text-slate-400 font-medium">
                         No brands active currently. Setup brands in "Brands Setup" first!
                       </div>
-                    ) : (() => {
-                      const list = brands.filter(b => b.name.toLowerCase().includes(brandSearchQuery.toLowerCase()));
-                      if (list.length === 0) {
-                        return (
-                          <div className="p-6 text-center text-xs text-slate-400 font-medium whitespace-normal">
-                            No matching brands matching "{brandSearchQuery}"
-                          </div>
-                        );
-                      }
-                      return (
-                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-                          {list.map((b) => {
-                            const isSelected = selectedBrandId === b.id;
-                            const hasValues = parseFloat(dailySalesInputs[b.id]?.salesAmount || '0') > 0 || parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10) > 0;
-                            return (
-                              <button
-                                key={b.id}
-                                type="button"
-                                onDoubleClick={() => {
-                                  handleSelectBrand(b.id);
-                                  // Instantly trigger confirm on double click
-                                  setIsBrandConfirmed(true);
-                                  setTimeout(() => {
-                                    const salesInput = document.getElementById('single-sales-amount-input');
-                                    if (salesInput) salesInput.focus();
-                                  }, 150);
-                                }}
-                                onClick={() => handleSelectBrand(b.id)}
-                                className={`group relative py-3 px-4 rounded-xl text-xs font-bold transition-all text-center flex flex-col justify-center items-center gap-1 border border-solid select-none active:scale-97 cursor-pointer ${
-                                  isSelected
-                                    ? 'bg-indigo-600 text-white border-indigo-600 ring-2 ring-indigo-300 shadow-md scale-102'
-                                    : hasValues
-                                      ? 'bg-indigo-50/70 text-indigo-900 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300'
-                                      : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-400 hover:bg-slate-50'
-                                }`}
-                              >
-                                {hasValues && (
-                                  <span className="absolute top-1 right-1 flex h-2 w-2">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                                  </span>
-                                )}
-                                <span className="truncate max-w-full">{b.name}</span>
-                                {hasValues && (
-                                  <span className="text-[9px] text-emerald-650 opacity-90 font-semibold uppercase mt-0.5 tracking-tight">
-                                    RM {parseFloat(dailySalesInputs[b.id]?.salesAmount || '0').toFixed(0)} ({parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10)}⌚)
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                        {brands.map((b) => {
+                          const isSelected = selectedBrandIds.includes(b.id);
+                          const hasValues = parseFloat(dailySalesInputs[b.id]?.salesAmount || '0') > 0 || parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10) > 0;
+                          return (
+                            <button
+                              key={b.id}
+                              type="button"
+                              onClick={() => handleSelectBrand(b.id)}
+                              className={`group relative py-3 px-4 rounded-xl text-xs font-bold transition-all text-center flex flex-col justify-center items-center gap-1 border border-solid select-none active:scale-97 cursor-pointer ${
+                                isSelected
+                                  ? 'bg-indigo-600 text-white border-indigo-600 ring-2 ring-indigo-300 shadow-md scale-102'
+                                  : hasValues
+                                    ? 'bg-indigo-50/70 text-indigo-900 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-400 hover:bg-slate-50'
+                              }`}
+                            >
+                              {hasValues && (
+                                <span className="absolute top-1 right-1 flex h-2 w-2">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                </span>
+                              )}
+                              <span className="truncate max-w-full">{b.name}</span>
+                              {hasValues && (
+                                <span className="text-[9px] text-emerald-650 opacity-90 font-semibold uppercase mt-0.5 tracking-tight">
+                                  RM {parseFloat(dailySalesInputs[b.id]?.salesAmount || '0').toFixed(0)} ({parseInt(dailySalesInputs[b.id]?.quantitySold || '0', 10)}⌚)
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* Selection footer */}
-                  <div className="flex items-center justify-between gap-4 mt-1 flex-wrap">
+                  <div className="flex items-center justify-between gap-4 mt-1 flex-wrap-reverse sm:flex-nowrap">
                     <div className="text-xs font-medium text-slate-500">
-                      {selectedBrandId ? (
-                        <span>
-                          Selected: <strong className="text-indigo-600 text-sm font-bold bg-indigo-50 px-2 py-0.5 rounded-lg">{brands.find(b => b.id === selectedBrandId)?.name}</strong> (Double-click button to skip next screen)
-                        </span>
+                      {selectedBrandIds.length > 0 ? (
+                        <div className="flex items-center gap-2">
+                          <span>
+                            Selected: <strong className="text-indigo-600 text-sm font-bold bg-indigo-50 px-2 py-0.5 rounded-lg">{selectedBrandIds.length}</strong> watch brand{selectedBrandIds.length > 1 ? 's' : ''}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleClearSelectionState}
+                            className="text-slate-400 hover:text-rose-600 font-bold ml-1 hover:underline transition-all cursor-pointer"
+                          >
+                            Clear All selection
+                          </button>
+                        </div>
                       ) : (
-                        <span className="text-amber-600 font-semibold">• Tap on a brand button to select it</span>
+                        <span className="text-amber-600 font-semibold flex items-center gap-1">
+                          <span>•</span> Tap to select one or more brand buttons above
+                        </span>
                       )}
                     </div>
                     <button
                       type="button"
-                      disabled={!selectedBrandId}
+                      disabled={selectedBrandIds.length === 0}
                       onClick={handleConfirmBrand}
                       className="py-2.5 px-6 font-bold text-sm bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-xl transition-all shadow-sm flex items-center gap-1.5 ml-auto active:scale-98 cursor-pointer"
                     >
@@ -667,14 +952,14 @@ export default function App() {
                   </div>
                 </div>
               ) : (
-                // STEP 2: ACTIVE KEY-IN SHEET
-                <form onSubmit={applySingleBrandValues} className="bg-indigo-50/35 p-4 border border-indigo-100 rounded-2xl flex flex-col gap-4 mt-2">
-                  <div className="flex items-center justify-between flex-wrap gap-2 pb-2.5 border-b border-indigo-100/55">
+                // STEP 2: MULTI BRAND KEY-IN SHEET (GRID DESIGN TO BATCH ADJUST SELECTIONS & CORRECT MISTAKES RAPIDLY)
+                <form onSubmit={applyWizardBrandValues} className="bg-indigo-50/20 p-4 sm:p-5 border border-indigo-100 rounded-2xl flex flex-col gap-4 mt-2">
+                  <div className="flex items-center justify-between flex-wrap gap-3 pb-3 border-b border-indigo-100/55">
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Keying product today:</span>
-                      <strong className="text-slate-800 text-lg font-extrabold tracking-tight">
-                        {brands.find(b => b.id === selectedBrandId)?.name}
-                      </strong>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Keying products:</span>
+                      <span className="text-xs font-semibold px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-lg">
+                        {selectedBrandIds.length} Brand{selectedBrandIds.length > 1 ? 's' : ''} Selected
+                      </span>
                     </div>
 
                     <button
@@ -683,53 +968,80 @@ export default function App() {
                       className="text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-150 px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 active:scale-97 cursor-pointer"
                     >
                       <X className="w-3.5 h-3.5" />
-                      <span>Wrong Brand? Reselect</span>
+                      <span>Wrong Selection? Choose Again</span>
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-                    {/* Sales RM */}
-                    <div className="md:col-span-5">
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
-                        Sales Amount (RM)
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">RM</span>
-                        <input
-                          id="single-sales-amount-input"
-                          type="text"
-                          placeholder="0.00"
-                          value={singleSalesAmount}
-                          onChange={(e) => setSingleSalesAmount(e.target.value.replace(/[^0-9.]/g, ''))}
-                          className="w-full text-right text-sm font-semibold bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500"
-                        />
-                      </div>
-                    </div>
+                  {/* Scrollable list of active brands with inputs side-by-side */}
+                  <div className="flex flex-col gap-3 max-h-96 overflow-y-auto pr-1">
+                    {selectedBrandIds.map((bId, idx) => {
+                      const brandName = brands.find(b => b.id === bId)?.name || 'Unknown Brand';
+                      return (
+                        <div 
+                          key={bId} 
+                          className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center bg-white p-3.5 rounded-xl border border-slate-150/80 shadow-2xs hover:border-indigo-200 transition-all group duration-200"
+                        >
+                          {/* Brand Info */}
+                          <div className="md:col-span-4 flex items-center gap-2.5">
+                            <span className="w-5.5 h-5.5 bg-indigo-50 text-indigo-600 rounded-md flex items-center justify-center font-bold text-[10px]">
+                              {idx + 1}
+                            </span>
+                            <span className="font-bold text-slate-800 text-sm truncate">{brandName}</span>
+                          </div>
 
-                    {/* Quantity Sold */}
-                    <div className="md:col-span-4">
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
-                        Quantity Sold
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="0"
-                        value={singleQuantitySold}
-                        onChange={(e) => setSingleQuantitySold(e.target.value.replace(/[^0-9]/g, ''))}
-                        className="w-full text-center text-sm font-semibold bg-white border border-slate-200 rounded-xl py-3 outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500"
-                      />
-                    </div>
+                          {/* Sales Input */}
+                          <div className="md:col-span-4">
+                            <div className="relative">
+                              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">RM</span>
+                              <input
+                                type="text"
+                                placeholder="0.00"
+                                value={wizardInputs[bId]?.salesAmount || ''}
+                                onChange={(e) => handleWizardInputChange(bId, 'salesAmount', e.target.value)}
+                                className="wizard-sales-input w-full text-right text-xs font-semibold bg-slate-50/50 border border-slate-200 rounded-lg pl-9 pr-3 py-2 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500"
+                              />
+                            </div>
+                          </div>
 
-                    {/* Action Trigger */}
-                    <div className="md:col-span-3">
-                      <button
-                        type="submit"
-                        className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5 active:scale-98 cursor-pointer"
-                      >
-                        <Check className="w-4 h-4" />
-                        <span>Apply to List</span>
-                      </button>
-                    </div>
+                          {/* Quantity Input */}
+                          <div className="md:col-span-3">
+                            <input
+                              type="text"
+                              placeholder="0"
+                              value={wizardInputs[bId]?.quantitySold || ''}
+                              onChange={(e) => handleWizardInputChange(bId, 'quantitySold', e.target.value)}
+                              className="w-full text-center text-xs font-semibold bg-slate-50/50 border border-slate-200 rounded-lg py-2 outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500"
+                            />
+                          </div>
+
+                          {/* Fast Close Button (In case of user error / tapping wrong brand in Step 1) */}
+                          <div className="md:col-span-1 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveBrandFromWizard(bId)}
+                              title="Remove this brand from key-in list"
+                              className="text-slate-300 hover:text-rose-650 hover:bg-slate-100 p-1.5 rounded-lg transition-all cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Submission row */}
+                  <div className="flex gap-3 justify-end items-center pt-2.5 border-t border-indigo-100/55">
+                    <span className="text-[11px] text-slate-400 font-semibold hidden sm:inline">
+                      *Tapping "Apply to List" merges all rows below!
+                    </span>
+                    <button
+                      type="submit"
+                      className="py-3 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-all shadow-md flex items-center gap-1.5 active:scale-98 cursor-pointer"
+                    >
+                      <Check className="w-4 h-4" />
+                      <span>Apply all to List</span>
+                    </button>
                   </div>
                 </form>
               )}
@@ -811,7 +1123,7 @@ export default function App() {
                         <div 
                           key={brand.id} 
                           className={`p-4 sm:px-6 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
-                            selectedBrandId === brand.id 
+                            selectedBrandIds.includes(brand.id) 
                               ? 'bg-indigo-50/45' 
                               : hasValues 
                                 ? 'bg-indigo-50/10 hover:bg-indigo-50/20' 
