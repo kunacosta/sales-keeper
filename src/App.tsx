@@ -22,7 +22,7 @@ import {
   Database,
   Smartphone,
   ChevronUp,
-  CloudZap,
+  Zap,
   RefreshCw,
   Hash
 } from 'lucide-react';
@@ -610,7 +610,7 @@ export default function App() {
             <div className="relative">
               <div className="absolute inset-0 bg-indigo-500 blur-lg opacity-40 animate-pulse" />
               <div className="relative w-12 h-12 bg-[#020617] border-2 border-indigo-500 rounded-2xl flex items-center justify-center">
-                <CloudZap className="w-7 h-7 text-indigo-500" />
+                <Zap className="w-7 h-7 text-indigo-500" />
               </div>
             </div>
             <div className="hidden sm:block">
