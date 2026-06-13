@@ -392,5 +392,36 @@ export const stateService = {
       const allSales = getLocalSales();
       return allSales.filter(s => s.date.startsWith(datePrefix));
     }
+  },
+
+  /**
+   * Resets all sales records for a given month (YYYY-MM)
+   */
+  async resetMonthlySales(datePrefix: string): Promise<void> {
+    const allSales = getLocalSales();
+    const filtered = allSales.filter(s => !s.date.startsWith(datePrefix));
+    setLocalSales(filtered);
+
+    if (isPlaceholder || !db) {
+      return;
+    }
+
+    try {
+      const start = `${datePrefix}-01`;
+      const end = `${datePrefix}-31`;
+      const q = query(
+        collection(db, 'daily_sales'), 
+        where('date', '>=', start),
+        where('date', '<=', end)
+      );
+      const snapshot = await getDocs(q);
+      const batch = writeBatch(db);
+      snapshot.forEach((snapDoc) => {
+        batch.delete(snapDoc.ref);
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error("Failed to reset monthly sales on Firestore.", err);
+    }
   }
 };
