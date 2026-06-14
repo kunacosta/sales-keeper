@@ -81,8 +81,12 @@ export default function DailyWizard({ brands, entryDate, onDateChange, brandStat
       await onSaved();
       showStatus('success', 'Sales saved');
       setStep('done');
-    } catch {
-      showStatus('error', 'Save failed');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('Save failed:', msg);
+      showStatus('error', msg.includes('permission') || msg.includes('Missing or insufficient')
+        ? 'Permission denied — check Firestore rules'
+        : 'Save failed: ' + msg.slice(0, 80));
     }
   };
 
