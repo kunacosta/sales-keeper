@@ -35,9 +35,9 @@ export interface SalesInput {
 }
 
 const SEED_BRANDS = [
-  "BATTERY (CLOCK)", "Bigotti", "Bonia", "Caesar", "Casio", "Cro wc", "Chronctech",
-  "Digitec", "Daniel klein", "J.bovier", "L. strap", "Mini Focus", "Naviforce",
-  "Pvc strap", "R-bat", "R&E", "REWARDS WATCH", "S-bat", "Slo/pokemon", "S.parts",
+  "BATTERY (CLOCK)", "Bonia", "Caesar", "Casio", "Cro wc", "Chronctech", "Digitec",
+  "Daniel klein", "J.bovier", "L. strap", "Mini Focus", "Naviforce", "Pvc strap",
+  "R-bat", "R&E", "REWARDS WATCH", "S-bat", "S.B. Polo", "Slo/pokemon", "S.parts",
   "Submarine", "service"
 ];
 
