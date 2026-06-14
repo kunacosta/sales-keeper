@@ -43,23 +43,23 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-[#020617] px-4">
+    <div className="min-h-screen w-full flex items-center justify-center bg-[#f8fafc] px-4">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-sm bg-[#0f172a]/40 backdrop-blur-xl border border-white/10 rounded-3xl p-8"
+        className="w-full max-w-sm bg-white border border-slate-200 shadow-lg shadow-slate-200/60 rounded-3xl p-8"
       >
         <div className="flex flex-col items-center mb-8">
-          <div className="p-3 rounded-2xl bg-indigo-500/20 mb-4">
-            <Watch className="w-7 h-7 text-indigo-400" />
+          <div className="p-3 rounded-2xl bg-indigo-50 mb-4">
+            <Watch className="w-7 h-7 text-indigo-600" />
           </div>
-          <h1 className="text-xl font-black text-white tracking-tight">Watch Sales</h1>
+          <h1 className="text-xl font-black text-slate-900 tracking-tight">Watch Sales</h1>
           <p className="text-slate-500 text-xs mt-1">Sign in to continue</p>
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="relative">
-            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="email"
               autoComplete="username"
@@ -67,12 +67,12 @@ export default function Login() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full bg-[#020617]/60 border border-white/10 rounded-xl py-3 pl-10 pr-3 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500/60"
+              className="w-full bg-white border border-slate-300 rounded-xl py-3 pl-10 pr-3 text-slate-900 text-sm placeholder-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
             />
           </div>
 
           <div className="relative">
-            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="password"
               autoComplete="current-password"
@@ -80,12 +80,12 @@ export default function Login() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="w-full bg-[#020617]/60 border border-white/10 rounded-xl py-3 pl-10 pr-3 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500/60"
+              className="w-full bg-white border border-slate-300 rounded-xl py-3 pl-10 pr-3 text-slate-900 text-sm placeholder-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
             />
           </div>
 
           {error && (
-            <div className="flex items-center gap-2 text-rose-400 text-xs">
+            <div className="flex items-center gap-2 text-rose-600 text-xs">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{error}</span>
             </div>
@@ -94,7 +94,7 @@ export default function Login() {
           <button
             type="submit"
             disabled={submitting}
-            className="mt-2 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-bold text-sm rounded-xl py-3 transition-colors"
+            className="mt-2 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold text-sm rounded-xl py-3 transition-colors"
           >
             {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
             {submitting ? 'Signing in…' : 'Sign in'}
