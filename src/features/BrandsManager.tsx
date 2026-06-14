@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Plus, Trash2, List, RotateCcw, RefreshCw } from 'lucide-react';
+import { useState, useRef } from 'react';
+import { Plus, Trash2, List, RotateCcw, RefreshCw, GripVertical } from 'lucide-react';
 import { Brand, stateService } from '../lib/stateService.ts';
 import { getMonthYear } from '../lib/format.ts';
 import { Card, PrimaryButton } from '../ui/theme.tsx';
@@ -16,6 +16,12 @@ export default function BrandsManager({ brands, entryDate, isSyncing, showStatus
   const [newName, setNewName] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [localOrder, setLocalOrder] = useState<Brand[]>([]);
+  const dragIndex = useRef<number | null>(null);
+  const dragOverIndex = useRef<number | null>(null);
+
+  // Use localOrder while dragging, fall back to props
+  const displayBrands = localOrder.length > 0 ? localOrder : brands;
 
   const addBrand = async () => {
     const name = newName.trim();
@@ -26,6 +32,7 @@ export default function BrandsManager({ brands, entryDate, isSyncing, showStatus
     }
     await stateService.saveBrand(name, brands.length + 1);
     setNewName('');
+    setLocalOrder([]);
     await onChanged();
     showStatus('success', 'Brand added');
   };
@@ -33,6 +40,7 @@ export default function BrandsManager({ brands, entryDate, isSyncing, showStatus
   const deleteBrand = async (id: string) => {
     await stateService.deleteBrand(id);
     setConfirmDeleteId(null);
+    setLocalOrder([]);
     await onChanged();
     showStatus('success', 'Brand removed');
   };
@@ -42,6 +50,34 @@ export default function BrandsManager({ brands, entryDate, isSyncing, showStatus
     setConfirmReset(false);
     await onChanged();
     showStatus('success', 'Month reset');
+  };
+
+  const onDragStart = (i: number) => {
+    dragIndex.current = i;
+    if (localOrder.length === 0) setLocalOrder([...brands]);
+  };
+
+  const onDragEnter = (i: number) => {
+    dragOverIndex.current = i;
+    if (dragIndex.current === null || dragIndex.current === i) return;
+    setLocalOrder(prev => {
+      const next = [...prev];
+      const [moved] = next.splice(dragIndex.current!, 1);
+      next.splice(i, 0, moved);
+      dragIndex.current = i;
+      return next;
+    });
+  };
+
+  const onDragEnd = async () => {
+    dragIndex.current = null;
+    dragOverIndex.current = null;
+    if (localOrder.length === 0) return;
+    const reordered = localOrder.map((b, i) => ({ ...b, sortOrder: i + 1 }));
+    await stateService.saveBrandsOrder(reordered);
+    await onChanged();
+    setLocalOrder([]);
+    showStatus('success', 'Order saved');
   };
 
   return (
@@ -66,16 +102,24 @@ export default function BrandsManager({ brands, entryDate, isSyncing, showStatus
       </Card>
 
       <Card className="p-6">
-        <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-500 mb-4 flex items-center gap-2">
+        <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-500 mb-1 flex items-center gap-2">
           <List className="w-3.5 h-3.5" /> Brands ({brands.length})
         </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {brands.map((b, i) => (
-            <div key={b.id} className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2">
-              <span className="text-sm font-medium text-slate-700 flex items-center gap-2 truncate">
-                <span className="text-[10px] font-mono text-slate-400">{i + 1}</span>
-                {b.name}
-              </span>
+        <p className="text-[11px] text-slate-400 mb-4">Drag the <GripVertical className="w-3 h-3 inline" /> handle to reorder.</p>
+        <div className="flex flex-col gap-2">
+          {displayBrands.map((b, i) => (
+            <div
+              key={b.id}
+              draggable
+              onDragStart={() => onDragStart(i)}
+              onDragEnter={() => onDragEnter(i)}
+              onDragEnd={onDragEnd}
+              onDragOver={e => e.preventDefault()}
+              className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2 cursor-default select-none"
+            >
+              <GripVertical className="w-4 h-4 text-slate-300 cursor-grab active:cursor-grabbing shrink-0" />
+              <span className="text-[10px] font-mono text-slate-400 w-5 shrink-0">{i + 1}</span>
+              <span className="text-sm font-medium text-slate-700 flex-1 truncate">{b.name}</span>
               {confirmDeleteId === b.id ? (
                 <div className="flex items-center gap-1 shrink-0">
                   <button onClick={() => deleteBrand(b.id)} className="px-2 py-1 text-[10px] font-black uppercase rounded-lg bg-rose-600 text-white">Delete</button>
