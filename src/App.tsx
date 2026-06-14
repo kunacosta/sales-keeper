@@ -29,11 +29,28 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
+      // Pull latest data from Firestore first so a second device (phone/PC)
+      // always sees what the other device saved, not just its own localStorage.
+      await stateService.pullSalesFromFirestore(entryDate.substring(0, 7));
       setBrands(await stateService.getBrands());
       await refreshData(entryDate);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Re-sync when the tab/app comes back into focus (e.g. switching back on phone)
+  useEffect(() => {
+    const onVisible = async () => {
+      if (document.visibilityState === 'visible') {
+        await stateService.pullSalesFromFirestore(entryDate.substring(0, 7));
+        setBrands(await stateService.getBrands());
+        await refreshData(entryDate);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entryDate]);
 
   useEffect(() => {
     const interval = setInterval(() => setIsSyncing(stateService.isSyncing()), 2000);

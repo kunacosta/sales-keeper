@@ -339,6 +339,51 @@ export const stateService = {
   },
 
   /**
+   * Pulls the current month's (and previous month's) sales from Firestore
+   * and merges them into localStorage so a second device sees up-to-date data.
+   */
+  async pullSalesFromFirestore(datePrefix: string): Promise<void> {
+    if (isPlaceholder || !db) return;
+    try {
+      // Fetch current month + previous month to handle month-boundary edge cases
+      const [year, month] = datePrefix.split('-').map(Number);
+      const prevMonth = month === 1
+        ? `${year - 1}-12`
+        : `${year}-${String(month - 1).padStart(2, '0')}`;
+
+      const prefixes = [prevMonth, datePrefix];
+      const allFetched: DailySale[] = [];
+
+      for (const prefix of prefixes) {
+        const start = `${prefix}-01`;
+        const end = `${prefix}-31`;
+        const q = query(collection(db, 'daily_sales'), where('date', '>=', start), where('date', '<=', end));
+        const snapshot = await getDocs(q);
+        snapshot.forEach(snapDoc => {
+          const d = snapDoc.data();
+          const sale: DailySale = {
+            id: snapDoc.id,
+            date: d.date,
+            brandId: d.brandId,
+            salesAmount: d.salesAmount ?? 0,
+            quantitySold: d.quantitySold ?? 0,
+          };
+          if (d.mtdSalesAmount !== undefined) sale.mtdSalesAmount = d.mtdSalesAmount;
+          if (d.mtdQuantitySold !== undefined) sale.mtdQuantitySold = d.mtdQuantitySold;
+          allFetched.push(sale);
+        });
+      }
+
+      // Merge: keep local records for dates NOT in the fetched range, replace the rest
+      const fetchedDates = new Set(allFetched.map(s => s.date));
+      const local = getLocalSales().filter(s => !fetchedDates.has(s.date));
+      setLocalSales([...local, ...allFetched]);
+    } catch (err) {
+      console.warn('pullSalesFromFirestore failed', err);
+    }
+  },
+
+  /**
    * Fetches daily sales for a specific date
    */
   async getDailySales(date: string): Promise<DailySale[]> {
