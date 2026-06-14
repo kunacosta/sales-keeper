@@ -35,8 +35,11 @@ export default function MonthlyEditor({ brands, entryDate, onDateChange, brandSt
   };
 
   const startEntry = () => {
+    const brandOrder = Object.fromEntries(brands.map((b, i) => [b.id, i]));
+    const ordered = [...selectedIds].sort((a, b) => (brandOrder[a] ?? 999) - (brandOrder[b] ?? 999));
+    setSelectedIds(ordered);
     const seeded: Draft = {};
-    selectedIds.forEach(id => {
+    ordered.forEach(id => {
       const s = brandStats[id];
       seeded[id] = {
         rm: s && s.mtdRM > 0 ? String(s.mtdRM) : '',

@@ -36,8 +36,13 @@ export default function DailyWizard({ brands, entryDate, onDateChange, brandStat
   };
 
   const startEntry = () => {
+    // Sort selected IDs by their position in the brands array so the wizard
+    // pages in the same order the user arranged brands.
+    const brandOrder = Object.fromEntries(brands.map((b, i) => [b.id, i]));
+    const ordered = [...selectedIds].sort((a, b) => (brandOrder[a] ?? 999) - (brandOrder[b] ?? 999));
+    setSelectedIds(ordered);
     const seeded: Draft = {};
-    selectedIds.forEach(id => {
+    ordered.forEach(id => {
       const s = brandStats[id];
       seeded[id] = {
         rm: s && s.dailyRM > 0 ? String(s.dailyRM) : '',
