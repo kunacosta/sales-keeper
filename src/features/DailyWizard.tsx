@@ -195,6 +195,9 @@ export default function DailyWizard({ brands, entryDate, onDateChange, brandStat
 
   // --- REVIEW STEP ---
   if (step === 'review') {
+    const totalRM = selectedIds.reduce((sum, id) => sum + (parseFloat(draft[id]?.rm) || 0), 0);
+    const totalQty = selectedIds.reduce((sum, id) => sum + (parseInt(draft[id]?.qty) || 0), 0);
+
     return (
       <Card className="p-6 max-w-lg mx-auto">
         <h2 className="text-lg font-black text-slate-900 tracking-tight mb-1">Review & save</h2>
@@ -212,6 +215,12 @@ export default function DailyWizard({ brands, entryDate, onDateChange, brandStat
               </div>
             );
           })}
+          <div className="flex items-center justify-between p-3.5 bg-indigo-50">
+            <span className="text-sm font-black text-indigo-700">Daily total</span>
+            <span className="text-sm font-mono font-black text-indigo-700">
+              RM {fmt(totalRM)} <span className="text-indigo-300 mx-1">·</span> {fmt(totalQty)} pcs
+            </span>
+          </div>
         </div>
 
         <div className="flex items-center gap-3">

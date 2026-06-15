@@ -197,6 +197,12 @@ export default function MonthlyEditor({ brands, entryDate, onDateChange, brandSt
 
   // --- REVIEW STEP ---
   if (step === 'review') {
+    const totalRM = selectedIds.reduce((sum, id) => sum + (parseFloat(draft[id]?.rm) || 0), 0);
+    const totalQty = selectedIds.reduce((sum, id) => sum + (parseInt(draft[id]?.qty) || 0), 0);
+    const d = new Date(entryDate + 'T00:00:00');
+    const monthShort = d.toLocaleDateString('en-GB', { month: 'short' });
+    const periodLabel = `1 – ${d.getDate() - 1} ${monthShort}`;
+
     return (
       <Card className="p-6 max-w-lg mx-auto">
         <h2 className="text-lg font-black text-slate-900 tracking-tight mb-1">Review & save</h2>
@@ -214,6 +220,12 @@ export default function MonthlyEditor({ brands, entryDate, onDateChange, brandSt
               </div>
             );
           })}
+          <div className="flex items-center justify-between p-3.5 bg-amber-50">
+            <span className="text-sm font-black text-amber-700">{periodLabel} total</span>
+            <span className="text-sm font-mono font-black text-amber-700">
+              RM {fmt(totalRM)} <span className="text-amber-300 mx-1">·</span> {fmt(totalQty)} pcs
+            </span>
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
