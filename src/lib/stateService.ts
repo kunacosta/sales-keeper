@@ -286,11 +286,23 @@ export const stateService = {
         .sort((a, b) => b.date.localeCompare(a.date))
         .find(s => s.mtdSalesAmount !== undefined);
 
+      let mtdRM: number;
+      let mtdQty: number;
+      if (latestOverride) {
+        // Use the override as the base, then add daily entries that came AFTER it
+        const afterOverride = bMonthList.filter(s => s.date > latestOverride.date);
+        mtdRM = (latestOverride.mtdSalesAmount || 0) + afterOverride.reduce((acc, s) => acc + s.salesAmount, 0);
+        mtdQty = (latestOverride.mtdQuantitySold || 0) + afterOverride.reduce((acc, s) => acc + s.quantitySold, 0);
+      } else {
+        mtdRM = bMonthList.reduce((acc, s) => acc + s.salesAmount, 0);
+        mtdQty = bMonthList.reduce((acc, s) => acc + s.quantitySold, 0);
+      }
+
       stats[b.id] = {
         dailyRM: dEntry?.salesAmount || 0,
         dailyQty: dEntry?.quantitySold || 0,
-        mtdRM: latestOverride ? (latestOverride.mtdSalesAmount || 0) : bMonthList.reduce((acc, s) => acc + s.salesAmount, 0),
-        mtdQty: latestOverride ? (latestOverride.mtdQuantitySold || 0) : bMonthList.reduce((acc, s) => acc + s.quantitySold, 0),
+        mtdRM,
+        mtdQty,
       };
     });
 
