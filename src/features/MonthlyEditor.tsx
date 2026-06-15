@@ -68,8 +68,8 @@ export default function MonthlyEditor({ brands, entryDate, onDateChange, brandSt
         if (d) {
           return {
             brandId: b.id,
-            salesAmount: ex?.salesAmount ?? 0,
-            quantitySold: ex?.quantitySold ?? 0,
+            salesAmount: 0,
+            quantitySold: 0,
             mtdSalesAmount: parseFloat(d.rm) || 0,
             mtdQuantitySold: parseInt(d.qty) || 0,
           };
