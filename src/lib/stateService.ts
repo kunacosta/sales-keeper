@@ -193,6 +193,35 @@ export const stateService = {
     setLocalBrands(getLocalBrands().filter(b => b.id !== id));
   },
 
+  async deleteAllBrands(): Promise<void> {
+    if (!isPlaceholder && db) {
+      const snapshot = await getDocs(collection(db, brandsCol()));
+      const batch = writeBatch(db);
+      snapshot.forEach(snapDoc => batch.delete(snapDoc.ref));
+      await batch.commit();
+    }
+    setLocalBrands([]);
+  },
+
+  async saveBrandsMany(names: string[]): Promise<Brand[]> {
+    const existing = getLocalBrands();
+    const startOrder = existing.length + 1;
+    const newBrands: Brand[] = names.map((name, i) => ({
+      id: `brand_${Date.now()}_${i}`,
+      name: name.trim(),
+      sortOrder: startOrder + i,
+    }));
+    if (!isPlaceholder && db) {
+      const batch = writeBatch(db);
+      newBrands.forEach(b => {
+        batch.set(doc(db, brandsCol(), b.id), { name: b.name, sortOrder: b.sortOrder });
+      });
+      await batch.commit();
+    }
+    setLocalBrands([...existing, ...newBrands]);
+    return newBrands;
+  },
+
   // ---------------------------------------------------------------------------
   // Sales
   // ---------------------------------------------------------------------------
