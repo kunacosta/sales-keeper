@@ -48,11 +48,9 @@ export function buildWhatsappSummary(
     const mRM = s.mtdRM - s.dailyRM + dRM;
     const mQty = s.mtdQty - s.dailyQty + dQty;
 
-    if (dRM > 0 || dQty > 0 || mRM > 0) {
-      brandLines.push(`${b.name} =${fmt(dRM)}/${fmt(mRM)}⌚${fmt(dQty)}/${fmt(mQty)}`);
-      totalDay += dRM;
-      totalMon += mRM;
-    }
+    brandLines.push(`${b.name} =${fmt(dRM)}/${fmt(mRM)}⌚${fmt(dQty)}/${fmt(mQty)}`);
+    totalDay += dRM;
+    totalMon += mRM;
   });
 
   return [
