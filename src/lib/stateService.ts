@@ -143,6 +143,10 @@ export const stateService = {
         list.sort((a, b) => a.sortOrder - b.sortOrder);
         setLocalBrands(list);
       } else {
+        // If local cache is already an explicit empty array, the user cleared brands
+        // intentionally — don't re-seed.
+        const raw = typeof window !== 'undefined' ? localStorage.getItem(brandsKey()) : null;
+        if (raw === '[]') return;
         const seeds = SEED_BRANDS[currentOutlet.code] ?? SEED_BRANDS.MRT;
         const batch = writeBatch(db);
         const seededList: Brand[] = [];
