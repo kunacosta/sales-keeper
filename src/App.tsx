@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Watch, Share2, ShoppingCart, CalendarRange, Settings2 } from 'lucide-react';
-import { stateService, Brand, DailySale } from './lib/stateService.ts';
+import { Watch, Share2, ShoppingCart, CalendarRange, Settings2, Store } from 'lucide-react';
+import { stateService, setActiveOutlet, Brand, DailySale } from './lib/stateService.ts';
 import { getTodayStr } from './lib/format.ts';
 import { buildWhatsappSummary, BrandStat } from './lib/summary.ts';
-import { Toast } from './ui/theme.tsx';
+import { OUTLETS, outletsForEmail } from './lib/outlets.ts';
+import { useAuth } from './lib/AuthContext.tsx';
+import { Card, Toast } from './ui/theme.tsx';
 import { MobileReceiptSheet } from './ui/WhatsappReceipt.tsx';
 import DailyWizard from './features/DailyWizard.tsx';
 import MonthlyEditor from './features/MonthlyEditor.tsx';
@@ -19,6 +21,10 @@ const TABS: { id: Tab, label: string, icon: any }[] = [
 ];
 
 export default function App() {
+  const { user } = useAuth();
+  const allowed = useMemo(() => outletsForEmail(user?.email), [user]);
+
+  const [outlet, setOutlet] = useState<string>(() => outletsForEmail(user?.email)[0] ?? '');
   const [activeTab, setActiveTab] = useState<Tab>('daily');
   const [brands, setBrands] = useState<Brand[]>([]);
   const [monthlySales, setMonthlySales] = useState<DailySale[]>([]);
@@ -27,44 +33,41 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
 
+  const outletCode = OUTLETS[outlet]?.code ?? 'MRT';
+
+  // Single load path — always sets the active outlet FIRST so reads hit the
+  // right collections/cache, then pulls Firestore and refreshes local state.
+  const loadAll = async (code: string, date: string) => {
+    if (!code) return;
+    setActiveOutlet(code);
+    await stateService.pullSalesFromFirestore(date.substring(0, 7));
+    setBrands(await stateService.getBrands());
+    setMonthlySales(await stateService.getMonthlySales(date.substring(0, 7)));
+  };
+
+  // Runs on mount, when the owner switches outlet, and when the date changes.
   useEffect(() => {
-    (async () => {
-      // Pull latest data from Firestore first so a second device (phone/PC)
-      // always sees what the other device saved, not just its own localStorage.
-      await stateService.pullSalesFromFirestore(entryDate.substring(0, 7));
-      setBrands(await stateService.getBrands());
-      await refreshData(entryDate);
-    })();
+    loadAll(outlet, entryDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [outlet, entryDate]);
 
   // Re-sync when the tab/app comes back into focus (e.g. switching back on phone)
   useEffect(() => {
-    const onVisible = async () => {
-      if (document.visibilityState === 'visible') {
-        await stateService.pullSalesFromFirestore(entryDate.substring(0, 7));
-        setBrands(await stateService.getBrands());
-        await refreshData(entryDate);
-      }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadAll(outlet, entryDate);
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entryDate]);
+  }, [outlet, entryDate]);
 
   useEffect(() => {
     const interval = setInterval(() => setIsSyncing(stateService.isSyncing()), 2000);
     return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => {
-    refreshData(entryDate);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entryDate]);
-
   const refreshData = async (date: string) => {
-    const mSales = await stateService.getMonthlySales(date.substring(0, 7));
-    setMonthlySales(mSales);
+    setMonthlySales(await stateService.getMonthlySales(date.substring(0, 7)));
   };
 
   const reloadBrands = async () => {
@@ -75,7 +78,7 @@ export default function App() {
   const brandStats = useMemo<Record<string, BrandStat>>(
     () => stateService.getDashboardStats(entryDate),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [entryDate, monthlySales, brands]
+    [entryDate, monthlySales, brands, outlet]
   );
 
   const showStatus = (type: 'success' | 'error', msg: string) => {
@@ -84,9 +87,26 @@ export default function App() {
   };
 
   const receiptSummary = useMemo(
-    () => buildWhatsappSummary(brands, brandStats, {}, entryDate, { seedFromSaved: true }),
-    [brands, brandStats, entryDate]
+    () => buildWhatsappSummary(brands, brandStats, {}, entryDate, { seedFromSaved: true, outletCode }),
+    [brands, brandStats, entryDate, outletCode]
   );
+
+  // No outlet assigned to this login
+  if (allowed.length === 0) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <Card className="p-8 max-w-md text-center">
+          <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto mb-4">
+            <Store className="w-6 h-6" />
+          </div>
+          <h2 className="text-lg font-black text-slate-900 mb-1">No outlet assigned</h2>
+          <p className="text-slate-500 text-sm">
+            Your account ({user?.email}) isn't linked to an outlet yet. Ask the owner to add you.
+          </p>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen text-slate-800 font-sans selection:bg-indigo-200 overflow-x-hidden">
@@ -105,9 +125,30 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-lg font-black text-slate-900 tracking-tight leading-none">Watch Sales</h1>
-              <span className="text-[11px] font-bold text-slate-400">Daily & monthly tracker</span>
+              <span className="text-[11px] font-bold text-slate-400">{outletCode} · Daily & monthly tracker</span>
             </div>
           </div>
+
+          {/* OUTLET SWITCHER — only for accounts with more than one outlet */}
+          {allowed.length > 1 && (
+            <div className="flex bg-white border border-slate-200 shadow-sm p-1 rounded-2xl">
+              {allowed.map(code => {
+                const active = outlet === code;
+                return (
+                  <button
+                    key={code}
+                    onClick={() => { setOutlet(code); setActiveTab('daily'); }}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${
+                      active ? 'bg-slate-900 text-white shadow' : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    <Store className="w-3.5 h-3.5" />
+                    {OUTLETS[code]?.code ?? code}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </header>
 
         {/* TAB BAR + RECEIPT */}
@@ -144,7 +185,7 @@ export default function App() {
         <main>
           <AnimatePresence mode="wait">
             <motion.div
-              key={activeTab}
+              key={`${outlet}-${activeTab}`}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
@@ -158,6 +199,7 @@ export default function App() {
                   brandStats={brandStats}
                   showStatus={showStatus}
                   onSaved={() => refreshData(entryDate)}
+                  outletCode={outletCode}
                 />
               )}
               {activeTab === 'monthly' && (

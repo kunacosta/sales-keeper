@@ -9,6 +9,7 @@ import {
   where
 } from 'firebase/firestore';
 import { db, isPlaceholder } from './firebase.ts';
+import { OUTLETS, Outlet } from './outlets.ts';
 
 export interface Brand {
   id: string;
@@ -42,12 +43,28 @@ const SEED_BRANDS = [
 ];
 
 // ---------------------------------------------------------------------------
+// Active outlet — drives which Firestore collections and localStorage keys are
+// used. MRT's prefix is '' so existing data is reused with no migration.
+// ---------------------------------------------------------------------------
+
+let currentOutlet: Outlet = OUTLETS.MRT;
+
+export function setActiveOutlet(code: string) {
+  currentOutlet = OUTLETS[code] ?? OUTLETS.MRT;
+}
+
+const brandsCol = () => `${currentOutlet.prefix}brands`;
+const salesCol = () => `${currentOutlet.prefix}daily_sales`;
+const brandsKey = () => `${currentOutlet.prefix}retail_sales_brands`;
+const salesKey = () => `${currentOutlet.prefix}retail_sales_daily`;
+
+// ---------------------------------------------------------------------------
 // localStorage cache helpers — used for fast synchronous reads
 // ---------------------------------------------------------------------------
 
 function getLocalBrands(): Brand[] {
   if (typeof window === 'undefined') return [];
-  const data = localStorage.getItem('retail_sales_brands');
+  const data = localStorage.getItem(brandsKey());
   if (data) {
     try { return JSON.parse(data); } catch { /* fall through */ }
   }
@@ -56,18 +73,18 @@ function getLocalBrands(): Brand[] {
     name,
     sortOrder: index + 1
   }));
-  localStorage.setItem('retail_sales_brands', JSON.stringify(defaultBrands));
+  localStorage.setItem(brandsKey(), JSON.stringify(defaultBrands));
   return defaultBrands;
 }
 
 function setLocalBrands(brands: Brand[]) {
   if (typeof window !== 'undefined')
-    localStorage.setItem('retail_sales_brands', JSON.stringify(brands));
+    localStorage.setItem(brandsKey(), JSON.stringify(brands));
 }
 
 function getLocalSales(): DailySale[] {
   if (typeof window === 'undefined') return [];
-  const data = localStorage.getItem('retail_sales_daily');
+  const data = localStorage.getItem(salesKey());
   if (data) {
     try { return JSON.parse(data); } catch { /* fall through */ }
   }
@@ -76,7 +93,7 @@ function getLocalSales(): DailySale[] {
 
 function setLocalSales(sales: DailySale[]) {
   if (typeof window !== 'undefined')
-    localStorage.setItem('retail_sales_daily', JSON.stringify(sales));
+    localStorage.setItem(salesKey(), JSON.stringify(sales));
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +118,7 @@ export const stateService = {
 
   async _refreshBrandsFromFirestore() {
     try {
-      const snapshot = await getDocs(query(collection(db, 'brands')));
+      const snapshot = await getDocs(query(collection(db, brandsCol())));
       const list: Brand[] = [];
       snapshot.forEach(snapDoc => {
         const d = snapDoc.data();
@@ -121,7 +138,7 @@ export const stateService = {
         for (let i = 0; i < SEED_BRANDS.length; i++) {
           const brandId = `brand_${SEED_BRANDS[i].toLowerCase().replace(/[^a-z0-9]/g, '_')}_${i}`;
           const brandData = { name: SEED_BRANDS[i], sortOrder: i + 1 };
-          batch.set(doc(db, 'brands', brandId), brandData);
+          batch.set(doc(db, brandsCol(), brandId), brandData);
           seededList.push({ id: brandId, ...brandData });
         }
         await batch.commit();
@@ -140,7 +157,7 @@ export const stateService = {
 
     // Write to Firestore first (awaited), then update cache
     if (!isPlaceholder && db) {
-      await setDoc(doc(db, 'brands', targetId), { name: brandName, sortOrder });
+      await setDoc(doc(db, brandsCol(), targetId), { name: brandName, sortOrder });
     }
     const brands = getLocalBrands();
     setLocalBrands([...brands.filter(b => b.id !== targetId), newBrand]);
@@ -151,7 +168,7 @@ export const stateService = {
     if (!isPlaceholder && db) {
       const batch = writeBatch(db);
       orderedBrands.forEach(b => {
-        batch.set(doc(db, 'brands', b.id), { name: b.name, sortOrder: b.sortOrder });
+        batch.set(doc(db, brandsCol(), b.id), { name: b.name, sortOrder: b.sortOrder });
       });
       await batch.commit();
     }
@@ -160,7 +177,7 @@ export const stateService = {
 
   async deleteBrand(id: string): Promise<void> {
     if (!isPlaceholder && db) {
-      await deleteDoc(doc(db, 'brands', id));
+      await deleteDoc(doc(db, brandsCol(), id));
     }
     setLocalBrands(getLocalBrands().filter(b => b.id !== id));
   },
@@ -196,7 +213,7 @@ export const stateService = {
         };
         if (record.mtdSalesAmount !== undefined) data.mtdSalesAmount = record.mtdSalesAmount;
         if (record.mtdQuantitySold !== undefined) data.mtdQuantitySold = record.mtdQuantitySold;
-        batch.set(doc(db, 'daily_sales', record.id), data);
+        batch.set(doc(db, salesCol(), record.id), data);
       });
       await batch.commit();
     }
@@ -215,7 +232,7 @@ export const stateService = {
       const start = `${datePrefix}-01`;
       const end = `${datePrefix}-31`;
       const snapshot = await getDocs(
-        query(collection(db, 'daily_sales'), where('date', '>=', start), where('date', '<=', end))
+        query(collection(db, salesCol()), where('date', '>=', start), where('date', '<=', end))
       );
       const batch = writeBatch(db);
       snapshot.forEach(snapDoc => batch.delete(snapDoc.ref));
@@ -239,7 +256,7 @@ export const stateService = {
       const allFetched: DailySale[] = [];
       for (const prefix of [prevMonth, datePrefix]) {
         const snapshot = await getDocs(
-          query(collection(db, 'daily_sales'),
+          query(collection(db, salesCol()),
             where('date', '>=', `${prefix}-01`),
             where('date', '<=', `${prefix}-31`))
         );

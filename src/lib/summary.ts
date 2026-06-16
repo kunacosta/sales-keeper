@@ -20,8 +20,9 @@ export function buildWhatsappSummary(
   brandStats: Record<string, BrandStat>,
   draft: SummaryDraft,
   entryDate: string,
-  opts: { seedFromSaved?: boolean } = {}
+  opts: { seedFromSaved?: boolean; outletCode?: string } = {}
 ): string {
+  const outletCode = opts.outletCode ?? 'MRT';
   if (brands.length === 0) return 'No data available...';
 
   const d = new Date(entryDate);
@@ -55,7 +56,7 @@ export function buildWhatsappSummary(
   });
 
   return [
-    `${dateLabel}(MRT)`,
+    `${dateLabel}(${outletCode})`,
     `*Sale RM ${fmt(totalDay)}`,
     ...brandLines,
     `\nTotal 1-${dayNum} ${monthYr}`,

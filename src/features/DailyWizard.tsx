@@ -18,9 +18,10 @@ interface Props {
   brandStats: Record<string, BrandStat>;
   showStatus: (type: 'success' | 'error', msg: string) => void;
   onSaved: () => void | Promise<void>;
+  outletCode: string;
 }
 
-export default function DailyWizard({ brands, entryDate, onDateChange, brandStats, showStatus, onSaved }: Props) {
+export default function DailyWizard({ brands, entryDate, onDateChange, brandStats, showStatus, onSaved, outletCode }: Props) {
   const [step, setStep] = useState<Step>('select');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [index, setIndex] = useState(0);
@@ -91,8 +92,8 @@ export default function DailyWizard({ brands, entryDate, onDateChange, brandStat
   };
 
   const summary = useMemo(
-    () => buildWhatsappSummary(brands, brandStats, draft, entryDate, { seedFromSaved: true }),
-    [brands, brandStats, draft, entryDate]
+    () => buildWhatsappSummary(brands, brandStats, draft, entryDate, { seedFromSaved: true, outletCode }),
+    [brands, brandStats, draft, entryDate, outletCode]
   );
 
   // --- SELECT STEP ---

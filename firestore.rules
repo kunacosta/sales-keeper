@@ -39,6 +39,14 @@ service cloud.firestore {
       allow delete: if request.auth != null;
     }
 
+    // JCI outlet — separate brand list (app-level isolation)
+    match /JCI_brands/{brandId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && isValidBrand(incoming()) && isValidId(brandId);
+      allow update: if request.auth != null && isValidBrand(incoming()) && isValidId(brandId);
+      allow delete: if request.auth != null;
+    }
+
     // ==========================================
     // DAILY_SALES collection validation and constraints
     // ==========================================
@@ -55,6 +63,14 @@ service cloud.firestore {
     }
 
     match /daily_sales/{saleId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && isValidDailySale(incoming()) && isValidId(saleId);
+      allow update: if request.auth != null && isValidDailySale(incoming()) && isValidId(saleId);
+      allow delete: if request.auth != null;
+    }
+
+    // JCI outlet — separate sales data (app-level isolation)
+    match /JCI_daily_sales/{saleId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null && isValidDailySale(incoming()) && isValidId(saleId);
       allow update: if request.auth != null && isValidDailySale(incoming()) && isValidId(saleId);
