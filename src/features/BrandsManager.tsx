@@ -30,19 +30,31 @@ export default function BrandsManager({ brands, entryDate, isSyncing, showStatus
       showStatus('error', 'Brand already exists');
       return;
     }
-    await stateService.saveBrand(name, brands.length + 1);
-    setNewName('');
-    setLocalOrder([]);
-    await onChanged();
-    showStatus('success', 'Brand added');
+    try {
+      await stateService.saveBrand(name, brands.length + 1);
+      setNewName('');
+      setLocalOrder([]);
+      await onChanged();
+      showStatus('success', 'Brand added');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showStatus('error', msg.includes('permission') || msg.includes('Missing or insufficient')
+        ? 'Permission denied — publish updated Firestore rules'
+        : 'Add failed: ' + msg.slice(0, 80));
+    }
   };
 
   const deleteBrand = async (id: string) => {
-    await stateService.deleteBrand(id);
-    setConfirmDeleteId(null);
-    setLocalOrder([]);
-    await onChanged();
-    showStatus('success', 'Brand removed');
+    try {
+      await stateService.deleteBrand(id);
+      setConfirmDeleteId(null);
+      setLocalOrder([]);
+      await onChanged();
+      showStatus('success', 'Brand removed');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showStatus('error', 'Delete failed: ' + msg.slice(0, 80));
+    }
   };
 
   const hardReset = async () => {
