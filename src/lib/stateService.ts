@@ -289,10 +289,15 @@ export const stateService = {
       let mtdRM: number;
       let mtdQty: number;
       if (latestOverride) {
-        // Use the override as the base, then add daily entries that came AFTER it
+        // Base = override value + the override record's own daily salesAmount
+        // + any daily entries on dates AFTER the override date
         const afterOverride = bMonthList.filter(s => s.date > latestOverride.date);
-        mtdRM = (latestOverride.mtdSalesAmount || 0) + afterOverride.reduce((acc, s) => acc + s.salesAmount, 0);
-        mtdQty = (latestOverride.mtdQuantitySold || 0) + afterOverride.reduce((acc, s) => acc + s.quantitySold, 0);
+        mtdRM = (latestOverride.mtdSalesAmount || 0)
+          + (latestOverride.salesAmount || 0)
+          + afterOverride.reduce((acc, s) => acc + s.salesAmount, 0);
+        mtdQty = (latestOverride.mtdQuantitySold || 0)
+          + (latestOverride.quantitySold || 0)
+          + afterOverride.reduce((acc, s) => acc + s.quantitySold, 0);
       } else {
         mtdRM = bMonthList.reduce((acc, s) => acc + s.salesAmount, 0);
         mtdQty = bMonthList.reduce((acc, s) => acc + s.quantitySold, 0);
