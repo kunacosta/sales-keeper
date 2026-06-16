@@ -35,12 +35,21 @@ export interface SalesInput {
   mtdQuantitySold?: number;
 }
 
-const SEED_BRANDS = [
-  "BATTERY (CLOCK)", "Bonia", "Caesar", "Casio", "Cro wc", "Chronctech", "Digitec",
-  "Daniel klein", "J.bovier", "L. strap", "Mini Focus", "Naviforce", "Pvc strap",
-  "R-bat", "R&E", "REWARDS WATCH", "S-bat", "S.B. Polo", "Slo/pokemon", "S.parts",
-  "Submarine", "service"
-];
+const SEED_BRANDS: Record<string, string[]> = {
+  MRT: [
+    "BATTERY (CLOCK)", "Bonia", "Caesar", "Casio", "Cro wc", "Chronctech", "Digitec",
+    "Daniel klein", "J.bovier", "L. strap", "Mini Focus", "Naviforce", "Pvc strap",
+    "R-bat", "R&E", "REWARDS WATCH", "S-bat", "S.B. Polo", "Slo/pokemon", "S.parts",
+    "Submarine", "service"
+  ],
+  JCI: [
+    "ALBA", "BIGOTTI", "BONIA", "CASIO", "BABY-G", "EDIFICE", "G-SHOCK", "CITOLE",
+    "DANIEL KLEIN", "ECO DRIVE", "FREE GIFT", "J.BOVIER", "LONGINES", "LEATHER STRAP",
+    "MINI FOCUS", "MIDO", "NAVIFORCE", "P.V.C STRAP", "RENATA BATTERY", "SONY BATTERY",
+    "SANTA POLO", "SEIKO", "SEIKO 5", "SEIKO SPORTS 5", "SERVICE", "SPARE PARTS",
+    "STAINLESS STEEL STRAP", "TISSOT"
+  ],
+};
 
 // ---------------------------------------------------------------------------
 // Active outlet — drives which Firestore collections and localStorage keys are
@@ -68,7 +77,8 @@ function getLocalBrands(): Brand[] {
   if (data) {
     try { return JSON.parse(data); } catch { /* fall through */ }
   }
-  const defaultBrands: Brand[] = SEED_BRANDS.map((name, index) => ({
+  const seeds = SEED_BRANDS[currentOutlet.code] ?? SEED_BRANDS.MRT;
+  const defaultBrands: Brand[] = seeds.map((name, index) => ({
     id: `b_${Date.now()}_${index}`,
     name,
     sortOrder: index + 1
@@ -133,11 +143,12 @@ export const stateService = {
         list.sort((a, b) => a.sortOrder - b.sortOrder);
         setLocalBrands(list);
       } else {
+        const seeds = SEED_BRANDS[currentOutlet.code] ?? SEED_BRANDS.MRT;
         const batch = writeBatch(db);
         const seededList: Brand[] = [];
-        for (let i = 0; i < SEED_BRANDS.length; i++) {
-          const brandId = `brand_${SEED_BRANDS[i].toLowerCase().replace(/[^a-z0-9]/g, '_')}_${i}`;
-          const brandData = { name: SEED_BRANDS[i], sortOrder: i + 1 };
+        for (let i = 0; i < seeds.length; i++) {
+          const brandId = `brand_${seeds[i].toLowerCase().replace(/[^a-z0-9]/g, '_')}_${i}`;
+          const brandData = { name: seeds[i], sortOrder: i + 1 };
           batch.set(doc(db, brandsCol(), brandId), brandData);
           seededList.push({ id: brandId, ...brandData });
         }
